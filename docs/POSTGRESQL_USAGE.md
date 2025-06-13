@@ -147,8 +147,11 @@ os.environ["AGE_GRAPH_NAME"] = "my_minirag_graph"
 #    In a full setup, you'd also configure LLMs, embedding models, etc.
 global_config_dict = {
     "version": "0.1.0",
-    "llm_api_key": "your_llm_api_key", # Example, replace with actual config
-    "embedding_model_name": "your_embedding_model", # Example
+    "llm_api_key": "your_llm_api_key", # Or other relevant LLM credentials
+    "llm_model_name": "gpt-3.5-turbo", # Example: A string identifier for a registered model
+                                     # or a name used if llm_model_func is provided directly to MiniRAG constructor.
+    "embedding_model_name": "all-MiniLM-L6-v2", # Example: A string identifier for a registered embedding model
+                                               # or a name used if embedding_func is provided directly.
     "embedding_batch_num": 32,
     # Specify PostgreSQL implementations for storage
     "kv_storage_cls": "minirag.kg.postgres_impl.PGKVStorage",
@@ -220,5 +223,46 @@ This example demonstrates:
 2.  Setting the `AGE_GRAPH_NAME` environment variable.
 3.  Creating a `Config` object where you specify a central `postgres_db_config` for the PostgreSQL connection. MiniRAG will use this to initialize a `PostgreSQLDB` instance and pass it to the specified PostgreSQL-backed storage classes (`PGKVStorage`, `PGVectorStorage`, etc.). You also specify any other necessary arguments for these classes in their respective `*_cls_kwargs` sections.
 4.  A `main` async function to illustrate initialization. In a complete MiniRAG application, `MiniRAG.from_config()` would typically handle the instantiation of these storage backends based on the provided configuration.
+
+
+**Note on Specifying Models:**
+
+The `llm_model_name` and `embedding_model_name` fields in the configuration dictionary are typically string identifiers that MiniRAG uses to look up pre-registered models or configurations, especially when using `MiniRAG.from_config()`.
+
+However, for more complex setups, such as using custom model functions (like `hf_model_complete`) or `EmbeddingFunc` instances with lambda functions for embeddings, as one might define in a direct Python script (e.g., a `main.py`):
+
+```python
+# Example of direct MiniRAG instantiation with custom functions:
+# rag = MiniRAG(
+#     working_dir=WORKING_DIR,
+#     llm_model_func=hf_model_complete, # Direct function handle
+#     llm_model_max_token_size=200,
+#     llm_model_name=LLM_MODEL, # Name for reference/logging
+#     embedding_func=EmbeddingFunc( # Direct EmbeddingFunc instance
+#         embedding_dim=384,
+#         max_token_size=1000,
+#         func=lambda texts: hf_embed(
+#             texts,
+#             tokenizer=AutoTokenizer.from_pretrained(EMBEDDING_MODEL),
+#             embed_model=AutoModel.from_pretrained(EMBEDDING_MODEL),
+#         ),
+#     ),
+#     # postgres_db=your_postgres_db_instance, # if MiniRAG expects a db instance directly
+#     # config=your_config_object_with_postgres_db_config, # if MiniRAG initializes db from here
+# )
+```
+
+You have a couple of approaches when combining this with PostgreSQL configuration:
+
+1.  **Direct Instantiation of `MiniRAG`**: This is often the most straightforward for custom callables. You would prepare your `postgres_config_dict` as shown earlier, then:
+    *   Either pass `postgres_config_dict` to the `MiniRAG` constructor if it accepts it directly (e.g., as part of a larger `config` argument from which it can initialize `PostgreSQLDB`).
+    *   Or, instantiate `PostgreSQLDB` yourself (e.g., `my_db = PostgreSQLDB(config=postgres_config_dict); await my_db.initdb()`) and pass the `my_db` instance to the `MiniRAG` constructor if it has a `postgres_db` parameter.
+    The key is that your custom Python objects for models are passed directly.
+
+2.  **Using `MiniRAG.from_config()`**: If you wish to use `MiniRAG.from_config()` primarily, your `global_config_dict` would include the `postgres_db_config`. For the models, you would either:
+    *   Rely on string identifiers for `llm_model_name` and `embedding_model_name` that `MiniRAG.from_config()` can resolve to actual functions/classes (this might require pre-registering them with MiniRAG or using fully qualified import paths if supported).
+    *   Some frameworks allow passing callables directly within a Python dictionary if `from_config` is sophisticated enough, but this is less common for pure file-based (YAML/JSON) configurations.
+
+This PostgreSQL documentation focuses on configuring the *storage backend*. The `global_config_dict` example above primarily illustrates where PostgreSQL-specific configuration (`postgres_db_config`) fits in. For detailed model configuration strategies (direct instantiation vs. config-driven), please refer to MiniRAG's general documentation on model setup and initialization.
 
 By configuring MiniRAG this way, all data persistence and retrieval operations for the selected components will be handled by your PostgreSQL database.
