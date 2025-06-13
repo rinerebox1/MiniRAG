@@ -231,13 +231,17 @@ if __name__ == "__main__":
 ただし、カスタムモデル関数（`hf_model_complete`など）や、埋め込み用のラムダ関数を持つ`EmbeddingFunc`インスタンスを使用するなど、より複雑な設定の場合（例えば、直接的なPythonスクリプト、例: `main.py`で定義するような場合）:
 
 ```python
-# カスタム関数を使用したMiniRAGの直接インスタンス化の例:
+# カスタム関数とPostgreSQL用のConfigオブジェクトを使用した
+# MiniRAGの直接インスタンス化の例:
+#
+# (postgres_connection_details と config_for_minirag が上記のように定義されていると仮定)
+#
 # rag = MiniRAG(
 #     working_dir=WORKING_DIR,
-#     llm_model_func=hf_model_complete, # 直接的な関数ハンドル
+#     llm_model_func=hf_model_complete, # 直接の関数ハンドル
 #     llm_model_max_token_size=200,
 #     llm_model_name=LLM_MODEL, # 参照/ロギング用の名前
-#     embedding_func=EmbeddingFunc( # 直接的なEmbeddingFuncインスタンス
+#     embedding_func=EmbeddingFunc( # 直接のEmbeddingFuncインスタンス
 #         embedding_dim=384,
 #         max_token_size=1000,
 #         func=lambda texts: hf_embed(
@@ -246,17 +250,59 @@ if __name__ == "__main__":
 #             embed_model=AutoModel.from_pretrained(EMBEDDING_MODEL),
 #         ),
 #     ),
-#     # postgres_db=your_postgres_db_instance, # MiniRAGが直接dbインスタンスを期待する場合
-#     # config=your_config_object_with_postgres_db_config, # MiniRAGがここからdbを初期化する場合
+#     config=config_for_minirag # DBおよびその他の設定用のConfigオブジェクトを渡します
 # )
 ```
 
 このようなPostgreSQL設定との組み合わせには、いくつかのアプローチがあります:
 
-1.  **`MiniRAG`の直接インスタンス化**: カスタム呼び出し可能オブジェクトの場合、これが最も簡単なことが多いです。前述のように`postgres_config_dict`を準備し、次に:
-    *   `MiniRAG`コンストラクタが直接受け入れる場合（例: `PostgreSQLDB`を初期化できるより大きな`config`引数の一部として）、`postgres_config_dict`を渡します。
-    *   または、`PostgreSQLDB`を自分でインスタンス化し（例: `my_db = PostgreSQLDB(config=postgres_config_dict); await my_db.initdb()`）、`MiniRAG`コンストラクタに`postgres_db`パラメータがある場合は`my_db`インスタンスを渡します。
-    重要なのは、モデル用のカスタムPythonオブジェクトが直接渡されることです。
+1.  **`MiniRAG`の直接インスタンス化**: カスタム呼び出し可能オブジェクト（`llm_model_func`や`embedding_func`など）の場合、これが最も簡単なことが多いです。このアプローチを取る場合、`MiniRAG`コンストラクタに`Config`オブジェクトを渡すことでPostgreSQLデータベース設定を統合することを推奨します。この`Config`オブジェクトには`postgres_db_config`辞書が含まれている必要があります。`MiniRAG`はその後、内部的に`PostgreSQLDB`インスタンスを管理します。
+
+    これを構造化する方法は次のとおりです:
+
+    ```python
+    # 1. PostgreSQL接続辞書を定義します
+    postgres_connection_details = {
+        "host": "localhost",
+        "port": 5432,
+        "user": "your_user",
+        "password": "your_password",
+        "database": "minirag_db",
+        "workspace": "my_project_workspace"
+    }
+
+    # 2. PostgreSQLデータベース設定を含む、MiniRAG全体の
+    #    設定用の辞書を作成します。
+    #    ここには他の必要なMiniRAG設定も含めます。
+    minirag_config_dict = {
+        "postgres_db_config": postgres_connection_details,
+        # 必要に応じて他のMiniRAGトップレベル設定を追加します。例:
+        # "kv_storage_cls": "minirag.kg.postgres_impl.PGKVStorage", # など
+        # MiniRAGコンストラクタがこれらを使用してストレージタイプを選択する場合。
+        # ただし、完全なPGバックエンドの場合、postgres_db_configが存在すればこれらはしばしばデフォルト設定されます。
+    }
+
+    # 3. Configオブジェクトを作成します
+    from minirag.utils import Config
+    config_for_minirag = Config(config_dict=minirag_config_dict)
+
+    # 4. (Apache AGEを使用する場合) グラフ名環境変数を設定します
+    import os
+    os.environ["AGE_GRAPH_NAME"] = "my_minirag_graph" # または設定から取得します
+
+    # 5. カスタムモデル関数とConfigオブジェクトを使用してMiniRAGを直接
+    #    インスタンス化します。
+    # rag = MiniRAG(
+    #     working_dir=WORKING_DIR,  # 作業ディレクトリ
+    #     llm_model_func=your_hf_model_complete_function, # 直接の関数ハンドル
+    #     llm_model_name="your_llm_model_name_for_logging", # ロギング用のLLMモデル名
+    #     embedding_func=your_embedding_func_instance, # 直接のEmbeddingFuncインスタンス
+    #     config=config_for_minirag # ここにConfigオブジェクトを渡します
+    # )
+    #
+    # # await rag.init_async() # MiniRAGを初期化します (DB初期化を含む)
+    ```
+    この設定では、`MiniRAG`のコンストラクタまたはその初期化プロセス（例: `init_async()`内）が、渡された`config`オブジェクト内の`postgres_db_config`を検出し、内部的に`PostgreSQLDB`インスタンスをセットアップします。これにより、`MiniRAG`のインスタンス化がクリーンに保たれ、PostgreSQLがバックエンドとして正しく設定されることが保証されます。モデル用のカスタムPythonオブジェクトは直接渡され、最大限の柔軟性が提供されます。
 
 2.  **`MiniRAG.from_config()`の使用**: 主に`MiniRAG.from_config()`を使用したい場合、`global_config_dict`には`postgres_db_config`が含まれます。モデルについては、次のいずれかを行います:
     *   `MiniRAG.from_config()`が実際の関数/クラスに解決できる`llm_model_name`および`embedding_model_name`の文字列識別子に依存します（これには、MiniRAGへの事前の登録、またはサポートされている場合は完全修飾インポートパスの使用が必要になる場合があります）。
