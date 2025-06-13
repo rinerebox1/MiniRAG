@@ -3,11 +3,13 @@
 MiniRAGでPostgreSQLを使用する前に、以下の前提条件が満たされていることを確認してください。
 
 ### PostgreSQLサーバー
+
 *   **バージョン**: MiniRAGは一般的に最新のPostgreSQLバージョンと互換性があります。ソース内で特定の最小バージョンは明示されていませんが、パーティショニングやその他の有益なパフォーマンス向上機能を含む幅広い機能サポートのために、PostgreSQL 12+を推奨します。Apache AGEおよびpgvectorについては、それぞれのドキュメントでPostgreSQLバージョンの互換性を参照してください。
 *   **pgvector拡張機能**: ベクトル類似性検索機能（`PGVectorStorage`で使用）のためには、PostgreSQLデータベースに`pgvector`拡張機能がインストールされている必要があります。通常、データベースサーバーで拡張機能が利用可能な場合は、`CREATE EXTENSION IF NOT EXISTS vector;`を使用してインストールできます。
 *   **Apache AGE拡張機能**: グラフデータベース機能（`PGGraphStorage`で使用）のためには、Apache AGE (A Graph Extension) がPostgreSQLデータベースにインストールされ、設定されている必要があります。お使いのPostgreSQLバージョンに対応する公式のApache AGEインストールガイドに従ってください。
 
 ### Pythonの依存関係
+
 MiniRAG環境に以下のPythonライブラリがインストールされていることを確認してください。MiniRAGは`asyncpg`が見つからない場合にインストールを試みますが、依存関係を明示的に管理することが推奨されます。
 *   `asyncpg`: PostgreSQLとの非同期対話用。
 *   `psycopg-pool`: コネクションプーリング用（テストファイルで言及されており、堅牢なアプリケーションに適しています）。
@@ -635,8 +637,11 @@ os.environ["AGE_GRAPH_NAME"] = "my_minirag_graph"
 #    完全なセットアップでは、LLM、埋め込みモデルなども設定します。
 global_config_dict = {
     "version": "0.1.0",
-    "llm_api_key": "your_llm_api_key", # 例、実際の設定に置き換えてください
-    "embedding_model_name": "your_embedding_model", # 例
+    "llm_api_key": "your_llm_api_key", # または関連するLLM認証情報
+    "llm_model_name": "gpt-3.5-turbo", # 例: 登録済みモデルの文字列識別子
+                                         # または llm_model_func が MiniRAG コンストラクタに直接提供される場合に使用される名前。
+    "embedding_model_name": "all-MiniLM-L6-v2", # 例: 登録済み埋め込みモデルの文字列識別子
+                                                   # または embedding_func が直接提供される場合に使用される名前。
     "embedding_batch_num": 32,
     # ストレージ用のPostgreSQL実装を指定します
     "kv_storage_cls": "minirag.kg.postgres_impl.PGKVStorage",
@@ -664,7 +669,7 @@ async def main():
     # 注意: `namespace` と `embedding_func` はストレージクラスの説明用であり、
     # 通常は親コンポーネント (例: Indexer, Querier) によって設定されます。
     # PostgreSQLDBインスタンス `pg_db` はMiniRAGによって作成され、渡されます。
-    
+
     # kv_store_fulldocs = PGKVStorage(namespace="full_docs", global_config=config, embedding_func=None, db=rag_instance.postgres_db)
     # vector_store_chunks = PGVectorStorage(namespace="chunks", global_config=config, embedding_func=my_embedding_function, db=rag_instance.postgres_db)
     # doc_status_store = PGDocStatusStorage(global_config=config, db=rag_instance.postgres_db)
@@ -674,7 +679,7 @@ async def main():
     # 通常、MiniRAGを初期化すると、これらのストレージが設定に基づいてセットアップされます。
     # rag_instance = MiniRAG.from_config(config=config)
     # await rag_instance.init_async() # これにより、特にDB接続が初期化されます
-    
+
     # 初期化後、通常どおりMiniRAGを使用してインデックス作成とクエリを実行できます。
     # 例 (概念的):
     # await rag_instance.indexer.run_pipeline_async(docs_data)
@@ -697,7 +702,7 @@ if __name__ == "__main__":
     #     # 実際の埋め込みモデル呼び出しに置き換えてください
     #     print(f"Embedding {len(texts)} texts (dummy).")
     #     # 例: 適切な次元のダミーベクトルのリストを返します
-    #     return [[0.1] * 768 for _ in texts] 
+    #     return [[0.1] * 768 for _ in texts]
 
     asyncio.run(main())
 ```
@@ -707,5 +712,95 @@ if __name__ == "__main__":
 2.  `AGE_GRAPH_NAME`環境変数の設定。
 3.  PostgreSQL接続用の中央`postgres_db_config`を指定する`Config`オブジェクトの作成。MiniRAGはこれを使用して`PostgreSQLDB`インスタンスを初期化し、指定されたPostgreSQLバックエンドのストレージクラス（`PGKVStorage`、`PGVectorStorage`など）に渡します。また、これらのクラスに必要なその他の引数をそれぞれの`*_cls_kwargs`セクションで指定します。
 4.  初期化を示すための`main`非同期関数。完全なMiniRAGアプリケーションでは、通常、`MiniRAG.from_config()`が提供された設定に基づいてこれらのストレージバックエンドのインスタンス化を処理します。
+
+
+**モデル指定に関する注意:**
+
+設定辞書内の`llm_model_name`および`embedding_model_name`フィールドは、通常、MiniRAGが特に`MiniRAG.from_config()`を使用する際に、事前に登録されたモデルや設定を検索するために使用する文字列識別子です。
+
+ただし、カスタムモデル関数（`hf_model_complete`など）や、埋め込み用のラムダ関数を持つ`EmbeddingFunc`インスタンスを使用するなど、より複雑な設定の場合（例えば、直接的なPythonスクリプト、例: `main.py`で定義するような場合）:
+
+```python
+# カスタム関数とPostgreSQL用のConfigオブジェクトを使用した
+# MiniRAGの直接インスタンス化の例:
+#
+# (postgres_connection_details と config_for_minirag が上記のように定義されていると仮定)
+#
+# rag = MiniRAG(
+#     working_dir=WORKING_DIR,
+#     llm_model_func=hf_model_complete, # 直接の関数ハンドル
+#     llm_model_max_token_size=200,
+#     llm_model_name=LLM_MODEL, # 参照/ロギング用の名前
+#     embedding_func=EmbeddingFunc( # 直接のEmbeddingFuncインスタンス
+#         embedding_dim=384,
+#         max_token_size=1000,
+#         func=lambda texts: hf_embed(
+#             texts,
+#             tokenizer=AutoTokenizer.from_pretrained(EMBEDDING_MODEL),
+#             embed_model=AutoModel.from_pretrained(EMBEDDING_MODEL),
+#         ),
+#     ),
+#     config=config_for_minirag # DBおよびその他の設定用のConfigオブジェクトを渡します
+# )
+```
+
+このようなPostgreSQL設定との組み合わせには、いくつかのアプローチがあります:
+
+1.  **`MiniRAG`の直接インスタンス化**: カスタム呼び出し可能オブジェクト（`llm_model_func`や`embedding_func`など）の場合、これが最も簡単なことが多いです。このアプローチを取る場合、`MiniRAG`コンストラクタに`Config`オブジェクトを渡すことでPostgreSQLデータベース設定を統合することを推奨します。この`Config`オブジェクトには`postgres_db_config`辞書が含まれている必要があります。`MiniRAG`はその後、内部的に`PostgreSQLDB`インスタンスを管理します。
+
+    これを構造化する方法は次のとおりです:
+
+    ```python
+    # 1. PostgreSQL接続辞書を定義します
+    postgres_connection_details = {
+        "host": "localhost",
+        "port": 5432,
+        "user": "your_user",
+        "password": "your_password",
+        "database": "minirag_db",
+        "workspace": "my_project_workspace"
+    }
+
+    # 2. PostgreSQLデータベース設定を含む、MiniRAG全体の
+    #    設定用の辞書を作成します。
+    #    ここには他の必要なMiniRAG設定も含めます。
+    minirag_config_dict = {
+        "postgres_db_config": postgres_connection_details,
+        # 必要に応じて他のMiniRAGトップレベル設定を追加します。例:
+        # "kv_storage_cls": "minirag.kg.postgres_impl.PGKVStorage",
+        # "vector_storage_cls": "minirag.kg.postgres_impl.PGVectorStorage",
+        # "doc_status_storage_cls": "minirag.kg.postgres_impl.PGDocStatusStorage",
+        # "graph_storage_cls": "minirag.kg.postgres_impl.PGGraphStorage",
+        # など、MiniRAGコンストラクタがこれらを使用してストレージタイプを選択する場合。
+        # ただし、完全なPGバックエンドの場合、postgres_db_config が存在すればこれらはしばしばデフォルト設定されます。
+    }
+
+    # 3. Configオブジェクトを作成します
+    from minirag.utils import Config
+    config_for_minirag = Config(config_dict=minirag_config_dict)
+
+    # 4. (Apache AGEを使用する場合) グラフ名環境変数を設定します
+    import os
+    os.environ["AGE_GRAPH_NAME"] = "my_minirag_graph" # または設定から取得します
+
+    # 5. カスタムモデル関数とConfigオブジェクトを使用してMiniRAGを直接
+    #    インスタンス化します。
+    # rag = MiniRAG(
+    #     working_dir=WORKING_DIR,  # 作業ディレクトリ
+    #     llm_model_func=your_hf_model_complete_function, # 直接の関数ハンドル
+    #     llm_model_name="your_llm_model_name_for_logging", # ロギング用のLLMモデル名
+    #     embedding_func=your_embedding_func_instance, # 直接のEmbeddingFuncインスタンス
+    #     config=config_for_minirag # ここにConfigオブジェクトを渡します
+    # )
+    #
+    # # await rag.init_async() # MiniRAGを初期化します (DB初期化を含む)
+    ```
+    この設定では、`MiniRAG`のコンストラクタまたはその初期化プロセス（例: `init_async()`内）が、渡された`config`オブジェクト内の`postgres_db_config`を検出し、内部的に`PostgreSQLDB`インスタンスをセットアップします。これにより、`MiniRAG`のインスタンス化がクリーンに保たれ、PostgreSQLがバックエンドとして正しく設定されることが保証されます。モデル用のカスタムPythonオブジェクトは直接渡され、最大限の柔軟性が提供されます。
+
+2.  **`MiniRAG.from_config()`の使用**: 主に`MiniRAG.from_config()`を使用したい場合、`global_config_dict`には`postgres_db_config`が含まれます。モデルについては、次のいずれかを行います:
+    *   `MiniRAG.from_config()`が実際の関数/クラスに解決できる`llm_model_name`および`embedding_model_name`の文字列識別子に依存します（これには、MiniRAGへの事前の登録、またはサポートされている場合は完全修飾インポートパスの使用が必要になる場合があります）。
+    *   一部のフレームワークでは、`from_config`が十分に高度であれば、Python辞書内で呼び出し可能オブジェクトを直接渡すことができますが、純粋なファイルベース（YAML/JSON）の設定ではあまり一般的ではありません。
+
+このPostgreSQLドキュメントは、*ストレージバックエンド*の設定に焦点を当てています。上記の`global_config_dict`の例は、主にPostgreSQL固有の設定（`postgres_db_config`）がどこに適合するかを示しています。詳細なモデル設定戦略（直接インスタンス化 対 設定駆動型）については、モデルのセットアップと初期化に関するMiniRAGの一般ドキュメントを参照してください。
 
 このようにMiniRAGを設定することで、選択したコンポーネントのすべてのデータ永続化および検索操作がPostgreSQLデータベースによって処理されます。
