@@ -746,7 +746,7 @@ if __name__ == "__main__":
 
 このようなPostgreSQL設定との組み合わせには、いくつかのアプローチがあります:
 
-1.  **`MiniRAG`の直接インスタンス化**: カスタム呼び出し可能オブジェクト（`llm_model_func`や`embedding_func`など）の場合、これが最も簡単なことが多いです。このアプローチを取る場合、`MiniRAG`コンストラクタに`Config`オブジェクトを渡すことでPostgreSQLデータベース設定を統合することを推奨します。この`Config`オブジェクトには`postgres_db_config`辞書が含まれている必要があります。`MiniRAG`はその後、内部的に`PostgreSQLDB`インスタンスを管理します。
+1.  <font color="red">【★推奨★】</font>**`MiniRAG`の直接インスタンス化**: カスタム呼び出し可能オブジェクト（`llm_model_func`や`embedding_func`など）の場合、これが最も簡単なことが多いです。このアプローチを取る場合、`MiniRAG`コンストラクタに`Config`オブジェクトを渡すことでPostgreSQLデータベース設定を統合することを推奨します。この`Config`オブジェクトには`postgres_db_config`辞書が含まれている必要があります。`MiniRAG`はその後、内部的に`PostgreSQLDB`インスタンスを管理します。
 
     これを構造化する方法は次のとおりです:
 
@@ -766,11 +766,21 @@ if __name__ == "__main__":
     #    ここには他の必要なMiniRAG設定も含めます。
     minirag_config_dict = {
         "postgres_db_config": postgres_connection_details,
-        # 必要に応じて他のMiniRAGトップレベル設定を追加します。例:
+        # 必要に応じて他のMiniRAGトップレベル設定を追加します。
+        # 例:
+
         # "kv_storage_cls": "minirag.kg.postgres_impl.PGKVStorage",
         # "vector_storage_cls": "minirag.kg.postgres_impl.PGVectorStorage",
         # "doc_status_storage_cls": "minirag.kg.postgres_impl.PGDocStatusStorage",
         # "graph_storage_cls": "minirag.kg.postgres_impl.PGGraphStorage",
+    
+        # 特定のストレージクラスの引数 (dbインスタンスはMiniRAGによって渡されます)
+        "vector_storage_cls_kwargs": {"cosine_better_than_threshold": 0.2},
+        # 'db'以外の非デフォルトパラメータが必要な場合は、他の*_cls_kwargsを追加します
+        # "kv_storage_cls_kwargs": {},
+        # "doc_status_storage_cls_kwargs": {},
+        # "graph_storage_cls_kwargs": {},
+
         # など、MiniRAGコンストラクタがこれらを使用してストレージタイプを選択する場合。
         # ただし、完全なPGバックエンドの場合、postgres_db_config が存在すればこれらはしばしばデフォルト設定されます。
     }
