@@ -18,6 +18,494 @@ MiniRAG環境に以下のPythonライブラリがインストールされてい�
 pip install asyncpg psycopg-pool "psycopg[binary,pool]"
 ```
 
+## Colabで PostgreSQL を使う方法
+
+PostgreSQL、pgvector、Apache AGE の3つを含めた完全版のサンプルコード。
+
+PostgreSQL、pgvector、Apache AGEの3つすべてを含む完全版のサンプルコードを提示します[1]。LangChainは使用せず、純粋なPythonとSQLで実装します。
+
+## **完全なセットアップコード**
+
+```python
+# 1. システムの更新と必要なパッケージのインストール
+!apt-get update
+!apt-get install -y postgresql postgresql-contrib postgresql-server-dev-15
+!apt-get install -y build-essential libreadline-dev zlib1g-dev flex bison git
+
+# 2. PostgreSQLサーバーの起動
+!service postgresql start
+
+# 3. 必要なPythonライブラリのインストール
+!pip install psycopg2-binary sqlalchemy asyncpg psycopg-pool "psycopg[binary,pool]"
+
+print("✅ 基本システムのセットアップ完了")
+```
+
+## **pgvector拡張機能のインストール**
+
+```python
+# pgvectorのソースからインストール
+def install_pgvector():
+    print("pgvector拡張機能をインストール中...")
+    
+    # pgvectorのクローンとビルド
+    !git clone https://github.com/pgvector/pgvector.git /tmp/pgvector
+    
+    import os
+    os.chdir('/tmp/pgvector')
+    !make
+    !make install
+    
+    print("✅ pgvector拡張機能のインストール完了")
+
+install_pgvector()
+```
+
+## **Apache AGE拡張機能のインストール**
+
+```python
+# Apache AGEのソースからインストール
+def install_apache_age():
+    print("Apache AGE拡張機能をインストール中...")
+    
+    # Apache AGEのクローンとビルド
+    !git clone https://github.com/apache/age.git /tmp/age
+    
+    import os
+    os.chdir('/tmp/age')
+    !make install
+    
+    print("✅ Apache AGE拡張機能のインストール完了")
+
+install_apache_age()
+```
+
+## **PostgreSQL設定の更新**
+
+```python
+# postgresql.confの設定を更新
+def configure_postgresql():
+    try:
+        config_path = "/etc/postgresql/15/main/postgresql.conf"
+        
+        # shared_preload_librariesの設定
+        !sudo sed -i "s/#shared_preload_libraries = ''/shared_preload_libraries = 'age'/" {config_path}
+        
+        # PostgreSQLサービスの再起動
+        !sudo service postgresql restart
+        
+        print("✅ PostgreSQL設定を更新しました")
+        
+    except Exception as e:
+        print(f"設定更新エラー: {e}")
+
+configure_postgresql()
+```
+
+## **データベースとユーザーの設定**
+
+```python
+import psycopg2
+from sqlalchemy import create_engine, text
+import asyncpg
+
+# データベース接続の設定
+DB_CONFIG = {
+    'host': 'localhost',
+    'port': 5432,
+    'database': 'minirag_db',
+    'user': 'postgres',
+    'password': 'postgres'
+}
+
+# 基本的なデータベース設定
+def setup_database():
+    try:
+        # postgresユーザーでの初期設定
+        !sudo -u postgres psql -c "CREATE USER root WITH SUPERUSER"
+        !sudo -u postgres psql -c "ALTER USER postgres PASSWORD 'postgres';"
+        !sudo -u postgres psql -c "CREATE DATABASE minirag_db;"
+        
+        print("✅ データベースとユーザーの設定完了")
+        
+    except Exception as e:
+        print(f"データベース設定エラー: {e}")
+
+setup_database()
+```
+
+## **拡張機能の有効化**
+
+```python
+# pgvectorとApache AGE拡張機能の有効化
+def enable_extensions():
+    try:
+        conn = psycopg2.connect(**DB_CONFIG)
+        cursor = conn.cursor()
+        
+        # AGE拡張機能をロード
+        cursor.execute("LOAD 'age';")
+        
+        # 拡張機能を作成
+        cursor.execute("CREATE EXTENSION IF NOT EXISTS vector;")
+        cursor.execute("CREATE EXTENSION IF NOT EXISTS age;")
+        
+        # search_pathの設定[2]
+        cursor.execute("SET search_path = ag_catalog, \"$user\", public;")
+        
+        # 拡張機能の確認
+        cursor.execute("SELECT extname, extversion FROM pg_extension WHERE extname IN ('vector', 'age');")
+        extensions = cursor.fetchall()
+        
+        print("インストール済み拡張機能:")
+        for ext in extensions:
+            print(f"  - {ext[0]} (バージョン: {ext[1]})")
+        
+        conn.commit()
+        cursor.close()
+        conn.close()
+        
+        print("✅ 拡張機能の有効化完了")
+        
+    except Exception as e:
+        print(f"拡張機能有効化エラー: {e}")
+
+enable_extensions()
+```
+
+## **グラフデータベースの作成**
+
+```python
+# Apache AGE用のグラフ作成
+def create_graph():
+    try:
+        conn = psycopg2.connect(**DB_CONFIG)
+        cursor = conn.cursor()
+        
+        # search_pathの設定
+        cursor.execute("SET search_path = ag_catalog, \"$user\", public;")
+        
+        # グラフの作成
+        cursor.execute("SELECT create_graph('minirag_graph');")
+        
+        # 作成されたグラフの確認
+        cursor.execute("SELECT name FROM ag_graph;")
+        graphs = cursor.fetchall()
+        print(f"作成済みグラフ: {[graph[0] for graph in graphs]}")
+        
+        conn.commit()
+        cursor.close()
+        conn.close()
+        
+        print("✅ グラフデータベースの作成完了")
+        
+    except Exception as e:
+        print(f"グラフ作成エラー: {e}")
+
+create_graph()
+```
+
+## **テーブル構造の作成**
+
+```python
+# ベクトル検索とグラフ用のテーブル作成
+def create_tables():
+    try:
+        conn = psycopg2.connect(**DB_CONFIG)
+        cursor = conn.cursor()
+        
+        # ドキュメント用テーブル（ベクトル検索対応）[5]
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS documents (
+            id SERIAL PRIMARY KEY,
+            content TEXT NOT NULL,
+            embedding vector(1536),  -- OpenAI embeddings用
+            metadata JSONB,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+        """)
+        
+        # ベクトル検索用インデックス
+        cursor.execute("""
+        CREATE INDEX IF NOT EXISTS documents_embedding_idx 
+        ON documents USING ivfflat (embedding vector_cosine_ops) 
+        WITH (lists = 100);
+        """)
+        
+        # エンティティ用テーブル（グラフ連携用）
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS entities (
+            id SERIAL PRIMARY KEY,
+            name VARCHAR(255) NOT NULL,
+            entity_type VARCHAR(100),
+            properties JSONB,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+        """)
+        
+        # 関係性用テーブル
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS relationships (
+            id SERIAL PRIMARY KEY,
+            source_entity_id INTEGER REFERENCES entities(id),
+            target_entity_id INTEGER REFERENCES entities(id),
+            relationship_type VARCHAR(100),
+            weight FLOAT DEFAULT 1.0,
+            properties JSONB,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+        """)
+        
+        conn.commit()
+        cursor.close()
+        conn.close()
+        
+        print("✅ テーブル構造の作成完了")
+        
+    except Exception as e:
+        print(f"テーブル作成エラー: {e}")
+
+create_tables()
+```
+
+## **サンプルデータの挿入とテスト**
+
+```python
+import json
+import numpy as np
+
+# サンプルデータの挿入とテスト
+def insert_sample_data():
+    try:
+        conn = psycopg2.connect(**DB_CONFIG)
+        cursor = conn.cursor()
+        
+        # 1. ベクトルデータの挿入テスト
+        sample_embedding = np.random.rand(1536).tolist()  # ダミーベクトル
+        
+        cursor.execute("""
+        INSERT INTO documents (content, embedding, metadata) 
+        VALUES (%s, %s, %s)
+        """, (
+            "これはMiniRAGのテストドキュメントです。",
+            json.dumps(sample_embedding),
+            json.dumps({"type": "test", "category": "sample"})
+        ))
+        
+        # 2. エンティティデータの挿入
+        cursor.execute("""
+        INSERT INTO entities (name, entity_type, properties) 
+        VALUES (%s, %s, %s), (%s, %s, %s)
+        """, (
+            "MiniRAG", "システム", json.dumps({"description": "RAGシステム"}),
+            "PostgreSQL", "データベース", json.dumps({"description": "リレーショナルデータベース"})
+        ))
+        
+        # 3. 関係性データの挿入
+        cursor.execute("""
+        INSERT INTO relationships (source_entity_id, target_entity_id, relationship_type, weight) 
+        VALUES (1, 2, 'USES', 0.9)
+        """)
+        
+        # 4. Apache AGEでのグラフノード作成
+        cursor.execute("SET search_path = ag_catalog, \"$user\", public;")
+        
+        cursor.execute("""
+        SELECT * FROM cypher('minirag_graph', $$
+        CREATE (d:Document {
+            id: 1,
+            content: 'これはMiniRAGのテストドキュメントです',
+            type: 'sample'
+        })
+        $$) AS (result agtype);
+        """)
+        
+        cursor.execute("""
+        SELECT * FROM cypher('minirag_graph', $$
+        CREATE (s:System {
+            id: 1,
+            name: 'MiniRAG',
+            type: 'RAG_System'
+        })
+        $$) AS (result agtype);
+        """)
+        
+        # 5. グラフエッジの作成
+        cursor.execute("""
+        SELECT * FROM cypher('minirag_graph', $$
+        MATCH (d:Document), (s:System)
+        WHERE d.id = 1 AND s.id = 1
+        CREATE (d)-[r:BELONGS_TO {confidence: 0.95}]->(s)
+        $$) AS (result agtype);
+        """)
+        
+        conn.commit()
+        cursor.close()
+        conn.close()
+        
+        print("✅ サンプルデータの挿入完了")
+        
+    except Exception as e:
+        print(f"サンプルデータ挿入エラー: {e}")
+
+insert_sample_data()
+```
+
+## **検索機能のテスト**
+
+```python
+# ベクトル検索とグラフクエリのテスト
+def test_search_functionality():
+    try:
+        conn = psycopg2.connect(**DB_CONFIG)
+        cursor = conn.cursor()
+        
+        print("=== ベクトル検索テスト ===")
+        # ベクトル類似性検索のテスト[5]
+        test_vector = np.random.rand(1536).tolist()
+        
+        cursor.execute("""
+        SELECT id, content, embedding  %s as distance
+        FROM documents 
+        ORDER BY embedding  %s 
+        LIMIT 3;
+        """, (json.dumps(test_vector), json.dumps(test_vector)))
+        
+        vector_results = cursor.fetchall()
+        print(f"ベクトル検索結果: {len(vector_results)}件")
+        for result in vector_results:
+            print(f"  ID: {result[0]}, 距離: {result[2]:.4f}")
+        
+        print("\n=== グラフクエリテスト ===")
+        # Apache AGEでのグラフクエリ
+        cursor.execute("SET search_path = ag_catalog, \"$user\", public;")
+        
+        cursor.execute("""
+        SELECT * FROM cypher('minirag_graph', $$
+        MATCH (d:Document)-[r:BELONGS_TO]->(s:System)
+        RETURN d.content, r.confidence, s.name
+        $$) AS (doc_content agtype, confidence agtype, system_name agtype);
+        """)
+        
+        graph_results = cursor.fetchall()
+        print(f"グラフクエリ結果: {len(graph_results)}件")
+        for result in graph_results:
+            print(f"  ドキュメント: {result[0]}, 信頼度: {result[1]}, システム: {result[2]}")
+        
+        cursor.close()
+        conn.close()
+        
+        print("✅ 検索機能のテスト完了")
+        
+    except Exception as e:
+        print(f"検索テストエラー: {e}")
+
+test_search_functionality()
+```
+
+## **非同期接続のテスト**
+
+```python
+import asyncio
+
+# asyncpgを使用した非同期操作のテスト
+async def test_async_operations():
+    try:
+        # 非同期接続
+        conn = await asyncpg.connect(
+            host=DB_CONFIG['host'],
+            port=DB_CONFIG['port'],
+            database=DB_CONFIG['database'],
+            user=DB_CONFIG['user'],
+            password=DB_CONFIG['password']
+        )
+        
+        # 非同期でのデータ取得
+        result = await conn.fetchval('SELECT version()')
+        print(f"✅ 非同期接続成功: PostgreSQL {result.split()[1]}")
+        
+        # 非同期でのベクトル検索
+        rows = await conn.fetch("""
+        SELECT id, content, metadata 
+        FROM documents 
+        LIMIT 3
+        """)
+        
+        print(f"✅ 非同期データ取得: {len(rows)}件のドキュメント")
+        
+        await conn.close()
+        
+    except Exception as e:
+        print(f"非同期操作エラー: {e}")
+
+# 非同期関数の実行
+await test_async_operations()
+```
+
+## **最終確認とバックアップ**
+
+```python
+from google.colab import drive
+import pandas as pd
+
+# Google Driveマウント
+drive.mount('/content/drive')
+
+# 最終的な動作確認とバックアップ
+def final_verification_and_backup():
+    print("=== 最終確認 ===")
+    
+    conn = psycopg2.connect(**DB_CONFIG)
+    cursor = conn.cursor()
+    
+    # 1. 拡張機能の確認
+    cursor.execute("SELECT extname, extversion FROM pg_extension WHERE extname IN ('vector', 'age');")
+    extensions = cursor.fetchall()
+    print("インストール済み拡張機能:")
+    for ext in extensions:
+        print(f"  ✅ {ext[0]} (バージョン: {ext[1]})")
+    
+    # 2. テーブルの確認
+    cursor.execute("""
+    SELECT table_name 
+    FROM information_schema.tables 
+    WHERE table_schema = 'public'
+    ORDER BY table_name;
+    """)
+    tables = cursor.fetchall()
+    print(f"\n作成済みテーブル: {[table[0] for table in tables]}")
+    
+    # 3. グラフの確認
+    cursor.execute("SET search_path = ag_catalog, \"$user\", public;")
+    cursor.execute("SELECT name FROM ag_graph;")
+    graphs = cursor.fetchall()
+    print(f"作成済みグラフ: {[graph[0] for graph in graphs]}")
+    
+    # 4. データ件数の確認
+    cursor.execute("SELECT COUNT(*) FROM documents;")
+    doc_count = cursor.fetchone()[0]
+    print(f"ドキュメント件数: {doc_count}")
+    
+    cursor.close()
+    conn.close()
+    
+    # 5. バックアップの作成
+    backup_dir = '/content/drive/My Drive/minirag_backups'
+    !mkdir -p {backup_dir}
+    
+    timestamp = pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')
+    backup_file = f"{backup_dir}/minirag_complete_backup_{timestamp}.sql"
+    
+    !pg_dump -h localhost -U postgres -d minirag_db > {backup_file}
+    print(f"\n✅ バックアップ完了: {backup_file}")
+    
+    print("\n🎉 PostgreSQL + pgvector + Apache AGE の完全セットアップ成功！")
+
+final_verification_and_backup()
+```
+
+この完全版のサンプルコードにより、**PostgreSQL**、**pgvector**、**Apache AGE**の3つすべてが統合されたMiniRAG対応環境がColabで構築できます[1]。ベクトル検索とグラフデータベース機能の両方を活用した高度なRAGシステムの開発が可能になります。
+
 ## 設定
 
 MiniRAGをPostgreSQLインスタンスに接続するには、接続パラメータを提供する必要があります。これは通常、データベース対話を必要とするMiniRAGコンポーネントを初期化する際に行われます。
