@@ -277,9 +277,12 @@ if __name__ == "__main__":
     minirag_config_dict = {
         "postgres_db_config": postgres_connection_details,
         # 必要に応じて他のMiniRAGトップレベル設定を追加します。例:
-        # "kv_storage_cls": "minirag.kg.postgres_impl.PGKVStorage", # など
-        # MiniRAGコンストラクタがこれらを使用してストレージタイプを選択する場合。
-        # ただし、完全なPGバックエンドの場合、postgres_db_configが存在すればこれらはしばしばデフォルト設定されます。
+        # "kv_storage_cls": "minirag.kg.postgres_impl.PGKVStorage",
+        # "vector_storage_cls": "minirag.kg.postgres_impl.PGVectorStorage",
+        # "doc_status_storage_cls": "minirag.kg.postgres_impl.PGDocStatusStorage",
+        # "graph_storage_cls": "minirag.kg.postgres_impl.PGGraphStorage",
+        # など、MiniRAGコンストラクタがこれらを使用してストレージタイプを選択する場合。
+        # ただし、完全なPGバックエンドの場合、postgres_db_config が存在すればこれらはしばしばデフォルト設定されます。
     }
 
     # 3. Configオブジェクトを作成します
