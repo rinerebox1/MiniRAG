@@ -1,0 +1,25 @@
+services:
+  db:
+    build: .
+    container_name: postgres16-age-pgvector
+    shm_size: 1g                     # 共有メモリサイズを1GBに拡大
+    ports:
+      - "5433:5432"
+    env_file: .env
+    volumes:
+      - pgdata:/var/lib/postgresql/data           # 永続化ボリューム
+      - ./init/:/docker-entrypoint-initdb.d/  # 初期化スクリプト用
+      - ./sql/migrations/:/docker-entrypoint-initdb.d/migrations/ # マイグレーションスクリプト用
+    command:
+      - "postgres"
+      - "-c"
+      - "shared_buffers=512MB"       # データバッファ
+      - "-c"
+      - "max_worker_processes=10"    # ワーカー数上限
+      - "-c"
+      - "work_mem=16MB"             # クエリ作業メモリ
+      - "-c"
+      - "maintenance_work_mem=1GB"   # インデックス作成用メモリ（HNSW高速化）
+volumes:
+  pgdata:
+    driver: local
