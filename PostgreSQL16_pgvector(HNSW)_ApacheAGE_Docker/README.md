@@ -15,7 +15,7 @@ docker exec -it postgres16-age-pgvector psql -U postgres_user -d my_database -c 
 拡張機能の確認：
 docker exec -it postgres16-age-pgvector psql -U postgres_user -d my_database -c "\dx"
 
-## ハイブリッドクエリ
+## ハイブリッドクエリのテスト
 
 ホスト側で
 psql -h localhost -p 5432 -U <POSTGRES_USER> -d <POSTGRES_DB>
@@ -30,6 +30,34 @@ SELECT p.id, p.name, p.embedding FROM public.products AS p JOIN cypher('demo_gra
 でハイブリッド検索してみる。コサイン距離なので演算子は「<=>」にした。
 ここでいうハイブリッド検索は当初のイメージとは違う。以下のことをやっている。
 「ユーザー 'Alice' が '好き' な商品を、特定のベクトル [0.1, 0.1, 0.2] に意味的に近い順（類似度が高い順）に並べて表示する」
+
+## ポスグレサーバー起動中に5件のデータを追加してみる
+
+ホスト側でターミナルを開いて
+
+cd '/home/smorce/env2/work/MiniRAG/PostgreSQL16_pgvector(HNSW)_ApacheAGE_Docker'
+
+chmod +x sql/seed/001_add_5_products.sql
+
+cat sql/seed/001_add_5_products.sql | docker exec -i postgres16-age-pgvector psql -U postgres_user -d my_database
+
+を実行する。これで
+INSERT 0 5
+ result 
+が出れば正常にデータインサートできた。
+
+次にインサートしたデータを確認するには、
+
+docker exec -it postgres16-age-pgvector psql -U postgres_user -d my_database
+
+# リレーショナルテーブルの確認
+SELECT * FROM public.products ORDER BY id;
+
+# グラフデータ（ノードとリレーションシップ）の確認
+chmod +x sql/seed/002_check_5_products.sql
+
+cat sql/seed/002_check_5_products.sql | docker exec -i postgres16-age-pgvector psql -U postgres_user -d my_database
+
 
 
 
