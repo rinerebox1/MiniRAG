@@ -34,7 +34,6 @@ WORKDIR /app
 COPY --from=builder /root/.local /root/.local
 COPY --from=builder /app/minirag ./minirag
 COPY --from=builder /app/setup.py .
-COPY .env .
 
 # Make sure scripts in .local are usable
 ENV PATH=/root/.local/bin:$PATH

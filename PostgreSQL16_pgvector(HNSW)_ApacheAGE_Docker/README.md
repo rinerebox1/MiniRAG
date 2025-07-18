@@ -1,3 +1,12 @@
+
+
+
+
+
+
+
+
+===========================
 chmod +x scripts/build.sh
 chmod +x scripts/start.sh
 chmod +x scripts/stop.sh
