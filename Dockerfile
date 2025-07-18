@@ -23,6 +23,10 @@ COPY setup.py .
 
 # Install dependencies
 RUN pip install --user --no-cache-dir -r requirements.txt
+RUN pip install --user --no-cache-dir jupyter notebook
+RUN pip install --user --no-cache-dir transformers torch sentence-transformers
+RUN pip install --user --no-cache-dir openai nano-vectordb
+
 RUN pip install .
 
 # Final stage
@@ -37,3 +41,12 @@ COPY --from=builder /app/setup.py .
 
 # Make sure scripts in .local are usable
 ENV PATH=/root/.local/bin:$PATH
+
+# Jupyter Notebook用のポートを公開
+EXPOSE 8165
+
+# Jupyter Notebook用の設定ディレクトリを作成
+RUN mkdir -p /root/.jupyter
+
+# デフォルトでJupyter Notebookを起動
+CMD ["jupyter", "notebook", "--ip=0.0.0.0", "--port=8165", "--no-browser", "--allow-root", "--NotebookApp.token=''", "--NotebookApp.password=''"]

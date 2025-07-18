@@ -5,6 +5,8 @@ services:
       dockerfile: Dockerfile
     image: minirag-image:latest
     container_name: minirag-container
+    ports:
+      - "8165:8165"
     environment:
       - TZ=Asia/Tokyo
     restart: unless-stopped
