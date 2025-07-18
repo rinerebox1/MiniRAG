@@ -26,3 +26,5 @@ examples/output/
 *.ini
 build/
 minirag-venv/
+Dockerfile.no_api
+docker-compose.no_api.yml
