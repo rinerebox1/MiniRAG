@@ -2,9 +2,9 @@ version: '3.8'
 
 services:
   lightrag:
-    build: .
-    ports:
-      - "${PORT:-9721}:9721"
+    build:
+      context: .
+      dockerfile: Dockerfile
     volumes:
       - ./data/rag_storage:/app/data/rag_storage
       - ./data/inputs:/app/data/inputs

@@ -18,11 +18,9 @@ ENV PATH="/root/.cargo/bin:${PATH}"
 
 # Copy only requirements files first to leverage Docker cache
 COPY requirements.txt .
-COPY minirag/api/requirements.txt ./minirag/api/
 
 # Install dependencies
 RUN pip install --user --no-cache-dir -r requirements.txt
-RUN pip install --user --no-cache-dir -r minirag/api/requirements.txt
 
 # Final stage
 FROM python:3.11-slim
@@ -41,9 +39,3 @@ ENV PATH=/root/.local/bin:$PATH
 
 # Create necessary directories
 RUN mkdir -p /app/data/rag_storage /app/data/inputs
-
-# Expose the default port
-EXPOSE 9621
-
-# Set entrypoint
-ENTRYPOINT ["python", "-m", "minirag.api.minirag_server"]
