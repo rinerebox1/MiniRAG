@@ -5,9 +5,6 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    volumes:
-      - ./data/rag_storage:/app/data/rag_storage
-      - ./data/inputs:/app/data/inputs
     env_file:
       - .env
     environment:
@@ -15,8 +12,6 @@ services:
     restart: unless-stopped
     networks:
       - lightrag_net
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
 networks:
   lightrag_net:
     driver: bridge
