@@ -17,9 +17,7 @@ pydantic
 
 # File manipulation libraries
 PyPDF2
-python-docx
 python-dotenv
-python-pptx
 rouge
 
 setuptools
