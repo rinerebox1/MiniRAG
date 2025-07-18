@@ -6,6 +6,9 @@ PostgreSQL16_pgvector(HNSW)_ApacheAGE_Docker に作っちゃったけど、最�
 
 docker compose build --no-cache
 
+docker compose up -d
+
+docker compose down -v
 
 
 

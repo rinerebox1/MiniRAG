@@ -1,14 +1,12 @@
-version: '3.8'
-
 services:
   lightrag:
     build:
       context: .
       dockerfile: Dockerfile
-    env_file:
-      - .env
+    image: minirag-image:latest
+    container_name: minirag-container
     environment:
-      - TZ=UTC
+      - TZ=Asia/Tokyo
     restart: unless-stopped
     networks:
       - lightrag_net
