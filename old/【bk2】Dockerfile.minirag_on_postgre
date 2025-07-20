@@ -1,0 +1,148 @@
+# Dockerfile.minirag_on_postgre
+
+########################
+# 1. pg_builder stage
+#    Builds pgvector and Apache AGE extensions for PostgreSQL.
+########################
+ARG PG_MAJOR=16
+ARG PGVECTOR_VER=v0.8.0
+ARG AGE_VER=PG16/v1.5.0-rc0
+
+FROM postgres:${PG_MAJOR}-bookworm AS pg_builder
+
+ARG PG_MAJOR
+ARG PGVECTOR_VER
+ARG AGE_VER
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential git ca-certificates \
+        postgresql-server-dev-${PG_MAJOR} \
+        libreadline-dev zlib1g-dev \
+        flex bison \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /tmp
+RUN git clone --depth 1 --branch ${PGVECTOR_VER} https://github.com/pgvector/pgvector.git \
+ && cd pgvector \
+ && make && make install
+
+WORKDIR /tmp
+RUN git clone --depth 1 --branch ${AGE_VER} https://github.com/apache/age.git \
+ && cd age \
+ && make PG_CONFIG=/usr/bin/pg_config install
+
+########################
+# 2. py_builder stage
+#    Installs Python dependencies for the minirag application.
+########################
+FROM python:3.11-slim as py_builder
+
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    curl \
+    pkg-config \
+    libssl-dev \
+    && curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y \
+    && . "$HOME/.cargo/env" \
+    && rustup default stable \
+    && rm -rf /var/lib/apt/lists/*
+
+ENV PATH="/root/.cargo/bin:${PATH}"
+
+COPY requirements.txt .
+COPY ./minirag ./minirag
+COPY setup.py .
+
+RUN pip install --user --no-cache-dir -r requirements.txt
+RUN pip install --user --no-cache-dir jupyter notebook
+RUN pip install --user --no-cache-dir transformers torch sentence-transformers
+RUN pip install --user --no-cache-dir openai nano-vectordb
+RUN pip install .
+########################
+# 2.5. pg_runtime stage
+#     Provides PostgreSQL server binaries that will be copied into the final image.
+########################
+FROM postgres:${PG_MAJOR}-bookworm AS pg_runtime
+
+########################
+# 3. Final stage
+#    Combines PostgreSQL and the Python application into a single image.
+########################
+FROM python:3.11-slim
+
+ARG PG_MAJOR
+
+# Install supervisor, curl, and minimal libraries required by PostgreSQL
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl supervisor libreadline8 zlib1g libicu72 libssl3 libedit2 libxml2 libpq5 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create postgres user & group (needed for ownership of PGDATA)
+RUN groupadd -r postgres && useradd --no-log-init -r -g postgres postgres
+
+# Copy PostgreSQL runtime from pg_runtime stage
+COPY --from=pg_runtime /usr/local /usr/local
+COPY --from=pg_runtime /var/lib/postgresql /var/lib/postgresql
+# PostgreSQL 実行バイナリ(initdb など) を含める
+COPY --from=pg_runtime /usr/lib/postgresql/${PG_MAJOR}/bin /usr/lib/postgresql/${PG_MAJOR}/bin
+
+# Copy PostgreSQL extensions from pg_builder
+COPY --from=pg_builder /usr/lib/postgresql/${PG_MAJOR}/lib/*.so /usr/lib/postgresql/${PG_MAJOR}/lib/
+COPY --from=pg_builder /usr/share/postgresql/${PG_MAJOR}/extension/*vector* /usr/share/postgresql/${PG_MAJOR}/extension/
+COPY --from=pg_builder /usr/share/postgresql/${PG_MAJOR}/extension/*age*    /usr/share/postgresql/${PG_MAJOR}/extension/
+
+# Preload Apache AGE for PostgreSQL
+RUN echo "shared_preload_libraries = 'age'" >> /usr/share/postgresql/postgresql.conf.sample
+
+# Copy Python environment and application code from py_builder
+WORKDIR /app
+COPY --from=py_builder /root/.local /root/.local
+COPY --from=py_builder /app/minirag ./minirag
+COPY --from=py_builder /app/setup.py .
+
+# Set environment variables for Python and Rust
+ENV PATH="/root/.local/bin:/root/.cargo/bin:${PATH}"
+# PostgreSQL データディレクトリを明示的に指定
+ENV PGDATA="/var/lib/postgresql/data"
+
+# Configure supervisor to manage postgres and jupyter processes
+# - "shared_buffers=512MB"       # データバッファ
+# - "max_worker_processes=10"    # ワーカー数上限
+# - "work_mem=16MB"             # クエリ作業メモリ
+# - "maintenance_work_mem=1GB"   # インデックス作成用メモリ（HNSW高速化）
+RUN cat <<EOF > /etc/supervisor/supervisord.conf
+[supervisord]
+nodaemon=true
+user=root
+
+[program:postgres]
+command=/usr/local/bin/docker-entrypoint.sh postgres \
+         -c shared_buffers=512MB \
+         -c max_worker_processes=10 \
+         -c work_mem=16MB \
+         -c maintenance_work_mem=1GB
+autostart=true
+autorestart=true
+stdout_logfile=/dev/stdout
+stdout_logfile_maxbytes=0
+stderr_logfile=/dev/stderr
+stderr_logfile_maxbytes=0
+
+[program:jupyter]
+command=jupyter notebook --ip=0.0.0.0 --port=8165 --no-browser --allow-root --NotebookApp.token='' --NotebookApp.password=''
+directory=/app
+autostart=true
+autorestart=true
+stdout_logfile=/dev/stdout
+stdout_logfile_maxbytes=0
+stderr_logfile=/dev/stderr
+stderr_logfile_maxbytes=0
+EOF
+
+# Expose ports for PostgreSQL and Jupyter
+EXPOSE 5432 8165
+
+# Set the default command to run supervisor
+CMD ["/usr/bin/supervisord", "-c", "/etc/supervisor/supervisord.conf"] 

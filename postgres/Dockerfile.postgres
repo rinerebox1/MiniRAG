@@ -1,0 +1,44 @@
+# syntax=docker/dockerfile:1
+ARG PG_MAJOR=16
+ARG PGVECTOR_VER=v0.8.0
+ARG AGE_VER=PG16/v1.5.0-rc0
+
+########## Build stage ##########
+FROM postgres:${PG_MAJOR}-bookworm AS builder
+ARG PG_MAJOR
+ARG PGVECTOR_VER
+ARG AGE_VER
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      build-essential git ca-certificates \
+      postgresql-server-dev-${PG_MAJOR} \
+      libreadline-dev zlib1g-dev flex bison \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /tmp
+
+# Build pgvector
+RUN git clone --depth 1 --branch ${PGVECTOR_VER} https://github.com/pgvector/pgvector.git \
+ && cd pgvector && make && make install
+
+# Build Apache AGE
+RUN git clone --depth 1 --branch ${AGE_VER} https://github.com/apache/age.git \
+ && cd age && make PG_CONFIG=/usr/bin/pg_config install
+
+########## Runtime stage ##########
+FROM postgres:${PG_MAJOR}-bookworm
+ARG PG_MAJOR
+
+# Copy built artifacts (限定的にコピー推奨)
+COPY --from=builder /usr/lib/postgresql/${PG_MAJOR}/lib/age.so /usr/lib/postgresql/${PG_MAJOR}/lib/
+COPY --from=builder /usr/lib/postgresql/${PG_MAJOR}/lib/vector.so /usr/lib/postgresql/${PG_MAJOR}/lib/
+COPY --from=builder /usr/share/postgresql/${PG_MAJOR}/extension/age* /usr/share/postgresql/${PG_MAJOR}/extension/
+COPY --from=builder /usr/share/postgresql/${PG_MAJOR}/extension/*vector* /usr/share/postgresql/${PG_MAJOR}/extension/
+
+# Option: 基本設定 (他は runtime の -c で渡す方が明示的)
+# RUN echo "shared_preload_libraries='age'" >> /usr/share/postgresql/postgresql.conf.sample
+
+# Healthcheck
+HEALTHCHECK --interval=10s --timeout=3s --retries=5 CMD pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB" || exit 1
+
+EXPOSE 5432

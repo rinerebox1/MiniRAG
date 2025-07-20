@@ -1,0 +1,17 @@
+services:
+  lightrag:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: minirag-image:latest
+    container_name: minirag-container
+    ports:
+      - "8165:8165"
+    environment:
+      - TZ=Asia/Tokyo
+    restart: unless-stopped
+    networks:
+      - lightrag_net
+networks:
+  lightrag_net:
+    driver: bridge

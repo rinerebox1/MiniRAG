@@ -5,6 +5,18 @@
 PostgreSQL + pgvector + Apache AGE の Docker はできたので、次は MiniRAG を Docker で構築してみる。
 PostgreSQL16_pgvector(HNSW)_ApacheAGE_Docker に作っちゃったけど、最後には1つの Docker にまとめたい。
 
+chmod +x scripts/build.sh
+chmod +x scripts/start.sh
+chmod +x scripts/stop.sh
+
+http://localhost:8165/tree?
+
+
+
+print(os.getenv("DATABASE_URL"))
+# postgresql://postgres_user:postgres_pass@postgres:5432/my_database
+
+
 
 ## MiniRAG の Docker
 

@@ -18,6 +18,7 @@ gui/
 inputs
 rag_storage
 .env
+.env.*
 venv/
 examples/input/
 examples/output/

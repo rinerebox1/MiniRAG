@@ -1,17 +1,59 @@
 services:
-  lightrag:
+  postgres:
     build:
-      context: .
-      dockerfile: Dockerfile
-    image: minirag-image:latest
-    container_name: minirag-container
+      context: ./postgres
+      dockerfile: Dockerfile.postgres
+    image: postgres16_age_pgvector_image:latest
+    container_name: postgres16_age_pgvector_container
+    env_file: .env
     ports:
-      - "8165:8165"
+      - "5433:5432"
+    shm_size: 1g
+    volumes:
+      - pgdata:/var/lib/postgresql/data     # 永続化ボリューム
+      - ./postgres/init/:/docker-entrypoint-initdb.d  # 初期化スクリプト用
+      - ./postgres/sql/migrations/:/docker-entrypoint-initdb.d/migrations/ # マイグレーションスクリプト用
+    command:
+      - "postgres"
+      - "-c"
+      - "shared_preload_libraries=age"
+      - "-c"
+      - "shared_buffers=512MB"
+      - "-c"
+      - "max_worker_processes=10"
+      - "-c"
+      - "work_mem=16MB"
+      - "-c"
+      - "maintenance_work_mem=1GB"
+    networks:
+      - app_net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  minirag_on_postgre:
+    build:
+      context: ./minirag_app
+      dockerfile: Dockerfile.minirag_on_postgre
+    image: minirag_on_postgre_image:latest
+    container_name: minirag_on_postgre_container
+    depends_on:
+      postgres:
+        condition: service_healthy
     environment:
       - TZ=Asia/Tokyo
+      - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+    ports:
+      - "8165:8165"
     restart: unless-stopped
     networks:
-      - lightrag_net
+      - app_net
+
+volumes:
+  pgdata:
+
 networks:
-  lightrag_net:
+  app_net:
     driver: bridge

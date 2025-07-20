@@ -1,0 +1,29 @@
+services:
+  minirag_on_postgre:
+    build:
+      context: .
+      dockerfile: Dockerfile.minirag_on_postgre
+    image: minirag-on-postgre-image:latest
+    container_name: minirag-on-postgre-container
+    ports:
+      - "8165:8165" # Jupyter Notebook
+      - "5433:5432" # PostgreSQL
+    env_file: .env
+    environment:
+      - TZ=Asia/Tokyo
+    volumes:
+      - pgdata:/var/lib/postgresql/data           # 永続化ボリューム
+      - ./init/:/docker-entrypoint-initdb.d/      # 初期化スクリプト用
+      - ./sql/migrations/:/docker-entrypoint-initdb.d/migrations/ # マイグレーションスクリプト用
+    restart: unless-stopped
+    shm_size: 1g
+    networks:
+      - minirag_on_postgre_net
+
+volumes:
+  pgdata:
+    driver: local
+
+networks:
+  minirag_on_postgre_net:
+    driver: bridge
