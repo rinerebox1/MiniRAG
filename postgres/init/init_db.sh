@@ -20,15 +20,15 @@ psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -v ON_ERROR_STOP=1 <<-'SQL'
 SQL
 
 # 2. AGEのグラフを作成
-# SELECT * FROM ag_catalog.create_graph('demo_graph'); を実行
+# SELECT * FROM ag_catalog.create_graph('my_minirag_graph'); を実行
 # （戻り値はvoidなのでSELECT *にして実行だけ行う）
-echo "Apache AGEのグラフ 'demo_graph' を作成します..."
+echo "Apache AGEのグラフ 'my_minirag_graph' を作成します..."
 psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -v ON_ERROR_STOP=1 <<-'SQL'
     LOAD 'age';
     SET search_path = ag_catalog, "$user", public;
-    SELECT * FROM ag_catalog.create_graph('demo_graph');
+    SELECT * FROM ag_catalog.create_graph('my_minirag_graph');
 SQL
-echo "グラフ 'demo_graph' が作成されました。"
+echo "グラフ 'my_minirag_graph' が作成されました。"
 
 # 3. マイグレーションSQLファイルの実行（昇順）
 # ディレクトリ /migrations 内の *.sql を名前順に実行

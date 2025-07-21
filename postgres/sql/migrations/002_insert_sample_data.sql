@@ -11,7 +11,7 @@ SET search_path = ag_catalog, "$user", public;
 DO $$
 BEGIN
     BEGIN
-        PERFORM create_graph('demo_graph');
+        PERFORM create_graph('my_minirag_graph');
     EXCEPTION WHEN OTHERS THEN
         -- グラフが既に存在する場合は何もしない
         NULL;
@@ -28,12 +28,12 @@ INSERT INTO public.products (id, name, embedding) VALUES
 
 -- 2. グラフ側のユーザーノードと商品ノード、エッジを作成
 -- ユーザ "Alice" のノードを作成
-SELECT * FROM cypher('demo_graph', $$
+SELECT * FROM cypher('my_minirag_graph', $$
   CREATE (:User {name: 'Alice'})
 $$) as (v agtype);
 
 -- 商品ノードをグラフに追加（productsテーブルと対応付けるため product_id をプロパティに含める）
-SELECT * FROM cypher('demo_graph', $$
+SELECT * FROM cypher('my_minirag_graph', $$
   CREATE (:Product {product_id: 1, name: '商品A'}),
          (:Product {product_id: 2, name: '商品B'}),
          (:Product {product_id: 3, name: '商品C'})
@@ -41,7 +41,7 @@ $$) as (v agtype);
 
 -- Aliceが商品Aと商品Bを「LIKEした」というエッジを作成
 -- p.product_id IN [1, 2] で商品A(ID=1)と商品B(ID=2)を対象
-SELECT * FROM cypher('demo_graph', $$
+SELECT * FROM cypher('my_minirag_graph', $$
   MATCH (u:User {name: 'Alice'}), (p:Product)
   WHERE p.product_id IN [1, 2]
   CREATE (u)-[:LIKES]->(p)

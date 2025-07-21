@@ -11,7 +11,7 @@ INSERT INTO public.products (id, name, embedding) VALUES
 (8, 'Product H', '[0.8, 0.8, 0.9]');
 
 -- グラフに新しい `Product` ノードを5件追加
-SELECT * FROM cypher('demo_graph', $$
+SELECT * FROM cypher('my_minirag_graph', $$
     CREATE (:Product {product_id: 4, name: 'Product D'}),
            (:Product {product_id: 5, name: 'Product E'}),
            (:Product {product_id: 6, name: 'Product F'}),
@@ -20,7 +20,7 @@ SELECT * FROM cypher('demo_graph', $$
 $$) as (result agtype);
 
 -- 新しいユーザー 'Bob' を作成し、追加した商品5件に `:LIKES` 関係を追加
-SELECT * FROM cypher('demo_graph', $$
+SELECT * FROM cypher('my_minirag_graph', $$
     CREATE (u:User {name: 'Bob'})
     WITH u
     MATCH (p:Product) WHERE p.product_id IN [4, 5, 6, 7, 8]

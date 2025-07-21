@@ -782,15 +782,17 @@ class PGGraphStorage(BaseGraphStorage):
         src_label = PGGraphStorage._encode_graph_label(source_node_id.strip('"'))
         tgt_label = PGGraphStorage._encode_graph_label(target_node_id.strip('"'))
 
+        # 修正: エッジの向きを気にせずに「エッジがあるかどうか」をチェックしていたため、get_edge の処理と不整合が起きてエラーになっていた
+        # has_edge の方も方向を指定するように修正
+        # クエリの -[r]- を -[r]-> に変更
         query = """SELECT * FROM cypher('%s', $$
-                     MATCH (a:Entity {node_id: "%s"})-[r]-(b:Entity {node_id: "%s"})
-                     RETURN COUNT(r) > 0 AS edge_exists
-                   $$) AS (edge_exists bool)""" % (
+                    MATCH (a:Entity {node_id: "%s"})-[r]->(b:Entity {node_id: "%s"})
+                    RETURN COUNT(r) > 0 AS edge_exists
+                $$) AS (edge_exists bool)""" % (
             self.graph_name,
             src_label,
             tgt_label,
         )
-
         single_result = (await self._query(query))[0]
         logger.debug(
             "{%s}:query:{%s}:result:{%s}",
