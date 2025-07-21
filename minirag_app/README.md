@@ -17,6 +17,16 @@ print(os.getenv("DATABASE_URL"))
 # postgresql://postgres_user:postgres_pass@postgres:5432/my_database
 
 
+### ハイブリッドクエリのテスト
+```
+docker exec -it postgres16_age_pgvector_container psql -U postgres_user -d my_database
+```
+SELECT p.id, p.name, p.embedding FROM public.products AS p JOIN cypher('demo_graph', $$ MATCH (u:User {name: 'Alice'})-[:LIKES]->(prod:Product) RETURN prod.product_id $$) AS liked(product_id agtype) ON p.id = (liked.product_id)::INTEGER ORDER BY p.embedding <=> '[0.1, 0.1, 0.2]';
+
+
+
+
+
 
 ## MiniRAG の Docker
 

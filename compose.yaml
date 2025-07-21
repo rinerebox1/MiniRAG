@@ -39,6 +39,7 @@ services:
       dockerfile: Dockerfile.minirag_on_postgre
     image: minirag_on_postgre_image:latest
     container_name: minirag_on_postgre_container
+    env_file: .env
     depends_on:
       postgres:
         condition: service_healthy

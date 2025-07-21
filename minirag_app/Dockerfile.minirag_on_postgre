@@ -17,10 +17,15 @@ COPY requirements.txt .
 COPY setup.py .
 COPY minirag ./minirag
 
+##### SEDによる修正 #####
+# ここでソースコードのバグを修正します
+# →他にも色々な修正が必要だったため、コードを修正して上書きした(minirag_app/minirag/kg/postgres_impl.py)。sed コマンドは残しておく
+# RUN sed -i 's/where workspace=$1 and status=$1/where workspace=$1 and status=$2/' minirag/kg/postgres_impl.py
+
 RUN pip install --user --no-cache-dir -r requirements.txt \
  && pip install --user --no-cache-dir jupyter notebook \
  && pip install --user --no-cache-dir transformers torch sentence-transformers \
- && pip install --user --no-cache-dir openai nano-vectordb asyncpg psycopg "psycopg[binary]" \
+ && pip install --user --no-cache-dir openai nano-vectordb asyncpg psycopg "psycopg[binary,pool]" \
  && pip install --user --no-cache-dir .
 
 ########## Runtime stage ##########

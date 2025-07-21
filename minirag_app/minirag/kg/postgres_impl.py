@@ -390,6 +390,9 @@ class PGVectorStorage(BaseVectorStorage):
         for item in list_data:
             if self.namespace == "chunks":
                 upsert_sql, data = self._upsert_chunks(item)
+            elif self.namespace == "entities_name":
+                # 修正: "entities_name"は"chunks"と同じデータ構造として扱う
+                upsert_sql, data = self._upsert_chunks(item)
             elif self.namespace == "entities":
                 upsert_sql, data = self._upsert_entities(item)
             elif self.namespace == "relationships":
@@ -459,13 +462,25 @@ class PGDocStatusStorage(DocStatusStorage):
         self, status: DocStatus
     ) -> Dict[str, DocProcessingStatus]:
         """Get all documents by status"""
-        sql = "select * from LIGHTRAG_DOC_STATUS where workspace=$1 and status=$1"
+        # 修正点1: SQLのプレースホルダーを $1 と $2 に修正
+        sql = "select * from LIGHTRAG_DOC_STATUS where workspace=$1 and status=$2"
         params = {"workspace": self.db.workspace, "status": status}
-        result = await self.db.query(sql, params, True)
+        db_result = await self.db.query(sql, params, True)
         # Result is like [{'id': 'id1', 'status': 'PENDING', 'updated_at': '2023-07-01 00:00:00'}, {'id': 'id2', 'status': 'PENDING', 'updated_at': '2023-07-01 00:00:00'}, ...]
         # Converting to be a dict
-        return {
-            element["id"]: DocProcessingStatus(
+
+        # 修正点2: 辞書内包表記からforループに変更し、正常なコードのロジックを再現
+        processed_docs = {}
+        for element in db_result:
+            # 修正点3: 'content' がなければ 'content_summary' で代用するロジックを追加
+            # .get() を使うことで、キーが存在しなくてもエラーにならない
+            content = element.get("content")
+            if not content:
+                content = element.get("content_summary", "") # フォールバック
+
+            # 修正点4: DocProcessingStatus に必須の 'content' 引数を渡す
+            processed_docs[element["id"]] = DocProcessingStatus(
+                content=content,
                 content_summary=element["content_summary"],
                 content_length=element["content_length"],
                 status=element["status"],
@@ -473,8 +488,7 @@ class PGDocStatusStorage(DocStatusStorage):
                 updated_at=element["updated_at"],
                 chunks_count=element["chunks_count"],
             )
-            for element in result
-        }
+        return processed_docs
 
     async def get_failed_docs(self) -> Dict[str, DocProcessingStatus]:
         """Get all failed documents"""
