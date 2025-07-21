@@ -331,6 +331,7 @@ class AGEStorage(BaseGraphStorage):
                     psycopg.errors.InvalidSchemaName,
                     psycopg.errors.UniqueViolation,
                 ):
+                    print("★デバッグ(age_impl.py): create_graph already exists")
                     await conn.rollback()
 
         # execute the query, rolling back on an error

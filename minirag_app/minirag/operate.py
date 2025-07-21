@@ -175,16 +175,19 @@ async def _merge_edges_then_upsert(
     already_description = []
     already_keywords = []
 
+    # 修正: 既存のエッジがある場合は安全に取得してマージする。
     if await knowledge_graph_inst.has_edge(src_id, tgt_id):
         already_edge = await knowledge_graph_inst.get_edge(src_id, tgt_id)
-        already_weights.append(already_edge["weight"])
-        already_source_ids.extend(
-            split_string_by_multi_markers(already_edge["source_id"], [GRAPH_FIELD_SEP])
-        )
-        already_description.append(already_edge["description"])
-        already_keywords.extend(
-            split_string_by_multi_markers(already_edge["keywords"], [GRAPH_FIELD_SEP])
-        )
+        # まれに has_edge が True でも get_edge が None を返すことがあるため防御的にチェックする
+        if already_edge is not None:
+            already_weights.append(already_edge.get("weight", 0.0))
+            already_source_ids.extend(
+                split_string_by_multi_markers(already_edge.get("source_id", ""), [GRAPH_FIELD_SEP])
+            )
+            already_description.append(already_edge.get("description", ""))
+            already_keywords.extend(
+                split_string_by_multi_markers(already_edge.get("keywords", ""), [GRAPH_FIELD_SEP])
+            )
 
     weight = sum([dp["weight"] for dp in edges_data] + already_weights)
     description = GRAPH_FIELD_SEP.join(

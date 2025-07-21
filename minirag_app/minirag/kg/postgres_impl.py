@@ -170,6 +170,7 @@ class PostgreSQLDB:
             asyncpg.exceptions.InvalidSchemaNameError,
             asyncpg.exceptions.UniqueViolationError,
         ):
+            print("★デバッグ(postgres_impl.py): create_graph already exists")
             pass
 
 
@@ -391,8 +392,8 @@ class PGVectorStorage(BaseVectorStorage):
             if self.namespace == "chunks":
                 upsert_sql, data = self._upsert_chunks(item)
             elif self.namespace == "entities_name":
-                # 修正: "entities_name"は"chunks"と同じデータ構造として扱う
-                upsert_sql, data = self._upsert_chunks(item)
+                # 修正: "entities_name"は"entities"と同じデータ構造として扱う
+                upsert_sql, data = self._upsert_entities(item)
             elif self.namespace == "entities":
                 upsert_sql, data = self._upsert_entities(item)
             elif self.namespace == "relationships":
@@ -871,9 +872,11 @@ class PGGraphStorage(BaseGraphStorage):
         src_label = PGGraphStorage._encode_graph_label(source_node_id.strip('"'))
         tgt_label = PGGraphStorage._encode_graph_label(target_node_id.strip('"'))
 
+        # 修正: プロパティが空のエッジを除外して取得する
         query = """SELECT * FROM cypher('%s', $$
-                     MATCH (a:Entity {node_id: "%s"})-[r]->(b:Entity {node_id: "%s"})
-                     RETURN properties(r) as edge_properties
+                     MATCH (a:Entity {node_id: \"%s\"})-[r]->(b:Entity {node_id: \"%s\"})
+                     WHERE size(keys(properties(r))) > 0
+                     RETURN properties(r) AS edge_properties
                      LIMIT 1
                    $$) AS (edge_properties agtype)""" % (
             self.graph_name,

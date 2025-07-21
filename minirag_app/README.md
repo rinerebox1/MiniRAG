@@ -24,6 +24,34 @@ docker exec -it postgres16_age_pgvector_container psql -U postgres_user -d my_da
 SELECT p.id, p.name, p.embedding FROM public.products AS p JOIN cypher('my_minirag_graph', $$ MATCH (u:User {name: 'Alice'})-[:LIKES]->(prod:Product) RETURN prod.product_id $$) AS liked(product_id agtype) ON p.id = (liked.product_id)::INTEGER ORDER BY p.embedding <=> '[0.1, 0.1, 0.2]';
 
 
+---
+
+already_weights.append(already_edge["weight"])
+'NoneType' object is not subscriptable
+というエラーが出る問題。
+
+はい。今回の修正後は、通常フローで挿入・更新されるエッジには必ず `weight` が数値で入る設計になっています。
+
+根拠
+1. 抽出段階 (`_handle_single_relationship_extraction`)  
+   • LLM から返るレコード末尾が数値ならその値、無い場合でも `1.0` をデフォルトにして  
+   ```python
+   weight = float(record_attributes[-1]) if is_float_regex(... ) else 1.0
+   ```
+   を設定しています。  
+2. マージ段階 (`_merge_edges_then_upsert`)  
+   • `weight = sum([dp["weight"] for dp in edges_data] + already_weights)` で必ず数値を生成。  
+   • もし既存エッジに `weight` が無くても `already_edge.get("weight", 0.0)` で 0 を補完し、  
+     新しい `weight` を含む dict を `upsert_edge` に渡します。  
+3. DB 反映 (`upsert_edge`)  
+   • `SET r += {weight: ..., ...}` の形で PG/AGE に書き込むため、`weight` キーが空になることはありません。  
+
+注意点
+• パイプライン外で手動挿入する場合は `weight` を必ず指定してください。  
+• 旧データを移行せず残すと “プロパティ無しエッジ” が再発する可能性がありますが、  
+  今回の再ビルドで DB をまっさらにするため問題ありません。
+
+したがって、今後生成されるエッジには最低でも `weight = 1.0` が入ります。
 
 
 
