@@ -547,6 +547,7 @@ class MiniRAG:
                 asdict(self),
             )
         elif param.mode == "mini":
+            print("★デバッグ(minirag.py): mini mode")
             response = await minirag_query(
                 query,
                 self.chunk_entity_relation_graph,

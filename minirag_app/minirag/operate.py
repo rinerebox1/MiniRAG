@@ -1269,9 +1269,16 @@ async def _build_mini_query_context(
     nodes_from_query_list = []
     ent_from_query_dict = {}
 
+    print("★デバッグ(operate.py): _build_mini_query_context1")
+    print(ent_from_query)
+
     for ent in ent_from_query:
         ent_from_query_dict[ent] = []
         results_node = await entity_name_vdb.query(ent, top_k=query_param.top_k)
+        print("★デバッグ(operate.py): _build_mini_query_context2")
+        print(results_node)
+        # results_node の例（distance付き）
+        # [{'entity_name': '"映画"', 'distance': 0.85}, {'entity_name': '"散歩"', 'distance': 0.72}, ...]
 
         nodes_from_query_list.append(results_node)
         ent_from_query_dict[ent] = [e["entity_name"] for e in results_node]
@@ -1421,17 +1428,41 @@ async def minirag_query(  # MiniRAG
     query_param: QueryParam,
     global_config: dict,
 ) -> str:
+    print("★デバッグ(operate.py): aaa")
     use_model_func = global_config["llm_model_func"]
+    print("★デバッグ(operate.py): bbb")
     kw_prompt_temp = PROMPTS["minirag_query2kwd"]
+    print("★デバッグ(operate.py): ccc")
     TYPE_POOL, TYPE_POOL_w_CASE = await knowledge_graph_inst.get_types()
+    print("★デバッグ(operate.py): ddd")
     kw_prompt = kw_prompt_temp.format(query=query, TYPE_POOL=TYPE_POOL)
+    print("★デバッグ(operate.py): eee")
     result = await use_model_func(kw_prompt)
+    print("★デバッグ(operate.py): fff")
+
+    print("★デバッグ(operate.py): minirag_query1")
+    print(result)
+    # result の例
+    # ```json
+    # {
+    #   "answer_type_keywords": ["unknown"],
+    #   "entities_from_query": ["映画"]
+    # }
+    # ```
+
+    # ```json
+    # {
+    #   "answer_type_keywords": ["event", "person", "location"],
+    #   "entities_from_query": ["映画"]
+    # }
+    # ```
 
     try:
         keywords_data = json_repair.loads(result)
 
         type_keywords = keywords_data.get("answer_type_keywords", [])
         entities_from_query = keywords_data.get("entities_from_query", [])[:5]
+        print("★デバッグ(operate.py): minirag_query2")
 
     except json.JSONDecodeError:
         try:
@@ -1465,6 +1496,9 @@ async def minirag_query(  # MiniRAG
         query_param,
     )
 
+    print("★デバッグ(operate.py): minirag_query3")
+    print(context)
+
     if query_param.only_need_context:
         return context
     if context is None:
@@ -1478,5 +1512,8 @@ async def minirag_query(  # MiniRAG
         query,
         system_prompt=sys_prompt,
     )
+
+    print("★デバッグ(operate.py): minirag_query4")
+    print(response)
 
     return response

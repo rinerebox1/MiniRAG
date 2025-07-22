@@ -557,7 +557,7 @@ class PGGraphStorage(BaseGraphStorage):
 
     @staticmethod
     def load_nx_graph(file_name):
-        print("no preloading of graph with AGE in production")
+        print("本番ではAGEを使ったグラフのプリロードは行わない")
 
     def __init__(self, namespace, global_config, embedding_func):
         super().__init__(
@@ -569,6 +569,13 @@ class PGGraphStorage(BaseGraphStorage):
         self._node_embed_algorithms = {
             "node2vec": self._node2vec_embed,
         }
+
+    def __post_init__(self):
+        # AGEグラフデータベースではプリロードは行わない
+        # グラフデータはAGEデータベースに直接保存・読み込みされる
+        logger.info(
+            f"PGGraphStorage initialized for namespace '{self.namespace}' with AGE graph '{self.graph_name}'"
+        )
 
     async def index_done_callback(self):
         print("KG successfully indexed.")
@@ -760,6 +767,106 @@ class PGGraphStorage(BaseGraphStorage):
             result = [PGGraphStorage._record_to_dict(d) for d in data]
 
         return result
+
+    # 修正: エンティティの種類を取得するメソッド（AGE対応）にして追加
+    async def get_types(self):
+        types = set()
+        types_with_case = set()
+
+        # AGEグラフデータベースからエンティティタイプを取得
+        query = """SELECT * FROM cypher('%s', $$
+                     MATCH (n:Entity)
+                     RETURN DISTINCT properties(n).entity_type AS entity_type
+                   $$) AS (entity_type agtype)""" % (self.graph_name,)
+        
+        try:
+            records = await self._query(query)
+            for record in records:
+                if record and record.get("entity_type"):
+                    entity_type = record["entity_type"]
+                    if entity_type:
+                        types.add(entity_type.lower())
+                        types_with_case.add(entity_type)
+        except Exception as e:
+            logger.error(f"Error getting entity types: {e}")
+            
+        return list(types), list(types_with_case)
+
+    # 修正: 指定したタイプのノードを取得するメソッド（AGE対応）にして追加
+    async def get_node_from_types(self, type_list) -> Union[list, None]:
+        node_list = []
+        
+        # AGEグラフデータベースから指定タイプのエンティティを取得
+        type_conditions = " OR ".join([f'properties(n).entity_type = "{t}"' for t in type_list])
+        query = """SELECT * FROM cypher('%s', $$
+                     MATCH (n:Entity)
+                     WHERE %s
+                     RETURN properties(n).node_id AS node_id, properties(n) AS properties
+                   $$) AS (node_id agtype, properties agtype)""" % (self.graph_name, type_conditions)
+        
+        try:
+            records = await self._query(query)
+            for record in records:
+                if record and record.get("node_id"):
+                    node_id = PGGraphStorage._decode_graph_label(record["node_id"])
+                    node_list.append(node_id)
+                    
+            # 各ノードの詳細データを取得
+            node_datas = await asyncio.gather(
+                *[self.get_node(name) for name in node_list]
+            )
+            node_datas = [
+                {**n, "entity_name": k}
+                for k, n in zip(node_list, node_datas)
+                if n is not None
+            ]
+            return node_datas
+        except Exception as e:
+            logger.error(f"Error getting nodes from types: {e}")
+            return []
+    
+    # 修正: K-hopの近隣ノードを取得するメソッド（AGE対応）にして追加
+    async def get_neighbors_within_k_hops(self, source_node_id: str, k):
+        """
+        AGEグラフデータベースでK-hopの近隣ノードを取得
+        """
+        if not await self.has_node(source_node_id):
+            print("NO THIS ID:", source_node_id)
+            return []
+            
+        src_label = PGGraphStorage._encode_graph_label(source_node_id.strip('"'))
+        
+        # AGEではCypherクエリでK-hopの近隣を取得
+        query = """SELECT * FROM cypher('%s', $$
+                     MATCH path = (start:Entity {node_id: "%s"})-[*1..%d]-(neighbor:Entity)
+                     RETURN [n in nodes(path) | properties(n).node_id] AS path_nodes,
+                            [r in relationships(path) | r] AS path_edges
+                   $$) AS (path_nodes agtype, path_edges agtype)""" % (
+            self.graph_name, src_label, k
+        )
+        
+        try:
+            records = await self._query(query)
+            paths = []
+            
+            for record in records:
+                if record and record.get("path_nodes"):
+                    # ノードIDのパスをデコード
+                    node_path = []
+                    for node_id in record["path_nodes"]:
+                        decoded_id = PGGraphStorage._decode_graph_label(node_id)
+                        node_path.append(decoded_id)
+                    
+                    # エッジとして隣接ペアを作成
+                    edges = []
+                    for i in range(len(node_path) - 1):
+                        edges.append((node_path[i], node_path[i + 1]))
+                    paths.extend(edges)
+            
+            return paths
+        except Exception as e:
+            logger.error(f"Error getting neighbors within {k} hops: {e}")
+            return []
 
     async def has_node(self, node_id: str) -> bool:
         entity_name_label = PGGraphStorage._encode_graph_label(node_id.strip('"'))
@@ -1183,7 +1290,14 @@ SQL_TEMPLATES = {
                       content_vector=EXCLUDED.content_vector, update_time = CURRENT_TIMESTAMP
                      """,
     # SQL for VectorStorage
-    "entities": """SELECT entity_name FROM
+    # 修正: distance も SELECT するようにして追加
+    "entities": """SELECT entity_name, distance FROM
+        (SELECT id, entity_name, 1 - (content_vector <=> '[{embedding_string}]'::vector) as distance
+        FROM LIGHTRAG_VDB_ENTITY where workspace=$1)
+        WHERE distance>$2 ORDER BY distance DESC  LIMIT $3
+       """,
+    # 修正: エンティティ名のベクトル検索を追加（distanceも含める）
+    "entities_name": """SELECT entity_name, distance FROM
         (SELECT id, entity_name, 1 - (content_vector <=> '[{embedding_string}]'::vector) as distance
         FROM LIGHTRAG_VDB_ENTITY where workspace=$1)
         WHERE distance>$2 ORDER BY distance DESC  LIMIT $3
