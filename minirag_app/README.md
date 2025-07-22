@@ -2,14 +2,18 @@
 
 ![MiniRAG](https://files.mdnice.com/user/87760/ff711e74-c382-4432-bec2-e6f2aa787df1.jpg)
 
-PostgreSQL + pgvector + Apache AGE の Docker はできたので、次は MiniRAG を Docker で構築してみる。
-PostgreSQL16_pgvector(HNSW)_ApacheAGE_Docker に作っちゃったけど、最後には1つの Docker にまとめたい。
+- [done]PostgreSQL + pgvector + Apache AGE の Docker はできたので、次は MiniRAG を Docker で構築してみる。
+- [done]PostgreSQL16_pgvector(HNSW)_ApacheAGE_Docker に作っちゃったけど、最後には1つの Docker にまとめたい。
+
 
 chmod +x scripts/build.sh
 chmod +x scripts/start.sh
 chmod +x scripts/stop.sh
 
 http://localhost:8165/tree?
+
+
+作成したデータベースは「MiniRAG/data/postgres」に保存される。
 
 
 

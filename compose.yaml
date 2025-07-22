@@ -10,7 +10,7 @@ services:
       - "5433:5432"
     shm_size: 1g
     volumes:
-      - pgdata:/var/lib/postgresql/data     # 永続化ボリューム
+      - ./data/postgres:/var/lib/postgresql/data     # ホスト側永続化ボリューム
       - ./postgres/init/:/docker-entrypoint-initdb.d  # 初期化スクリプト用
       - ./postgres/sql/migrations/:/docker-entrypoint-initdb.d/migrations/ # マイグレーションスクリプト用
     command:
@@ -51,9 +51,6 @@ services:
     restart: unless-stopped
     networks:
       - app_net
-
-volumes:
-  pgdata:
 
 networks:
   app_net:
