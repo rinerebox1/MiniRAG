@@ -407,13 +407,26 @@ class PGVectorStorage(BaseVectorStorage):
         logger.info("vector data had been saved into postgresql db!")
 
     #################### query method ###############
-    async def query(self, query: str, top_k=5) -> Union[dict, list[dict]]:
+    async def query(
+        self, query: str, top_k=5, metadata_filter: dict | None = None
+    ) -> Union[dict, list[dict]]:
         """从向量数据库中查询数据"""
         embeddings = await self.embedding_func([query])
         embedding = embeddings[0]
         embedding_string = ",".join(map(str, embedding))
 
         sql = SQL_TEMPLATES[self.namespace].format(embedding_string=embedding_string)
+
+        # Add metadata filtering
+        if metadata_filter:
+            metadata_where_clause = " AND ".join(
+                [f"meta->>'{key}' = '{value}'" for key, value in metadata_filter.items()]
+            )
+            # a bit hacky, but it works for now
+            sql = sql.replace(
+                "WHERE distance>", f" AND {metadata_where_clause} WHERE distance>"
+            )
+
         params = {
             "workspace": self.db.workspace,
             "better_than_threshold": self.cosine_better_than_threshold,

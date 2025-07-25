@@ -34,6 +34,7 @@ class QueryParam:
 
     max_token_for_node_context: int = 500#For Mini, if too long, SLM may be fail to generate any response
 
+    metadata_filter: dict = field(default_factory=dict)
     hl_keywords: list[str] = field(default_factory=list)
     ll_keywords: list[str] = field(default_factory=list)
     # Conversation history support
@@ -64,7 +65,9 @@ class BaseVectorStorage(StorageNameSpace):
     embedding_func: EmbeddingFunc
     meta_fields: set = field(default_factory=set)
 
-    async def query(self, query: str, top_k: int) -> list[dict]:
+    async def query(
+        self, query: str, top_k: int, metadata_filter: dict | None = None
+    ) -> list[dict]:
         raise NotImplementedError
 
     async def upsert(self, data: dict[str, dict]):

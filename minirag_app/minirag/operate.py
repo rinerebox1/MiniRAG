@@ -490,7 +490,9 @@ async def _build_local_query_context(
     text_chunks_db: BaseKVStorage[TextChunkSchema],
     query_param: QueryParam,
 ):
-    results = await entities_vdb.query(query, top_k=query_param.top_k)
+    results = await entities_vdb.query(
+        query, top_k=query_param.top_k, metadata_filter=query_param.metadata_filter
+    )
 
     if not len(results):
         return None
@@ -762,7 +764,9 @@ async def _build_global_query_context(
     text_chunks_db: BaseKVStorage[TextChunkSchema],
     query_param: QueryParam,
 ):
-    results = await relationships_vdb.query(keywords, top_k=query_param.top_k)
+    results = await relationships_vdb.query(
+        keywords, top_k=query_param.top_k, metadata_filter=query_param.metadata_filter
+    )
 
     if not len(results):
         return None
@@ -1084,7 +1088,9 @@ async def naive_query(
     global_config: dict,
 ):
     use_model_func = global_config["llm_model_func"]
-    results = await chunks_vdb.query(query, top_k=query_param.top_k)
+    results = await chunks_vdb.query(
+        query, top_k=query_param.top_k, metadata_filter=query_param.metadata_filter
+    )
     if not len(results):
         return PROMPTS["fail_response"]
     chunks_ids = [r["id"] for r in results]
@@ -1271,7 +1277,9 @@ async def _build_mini_query_context(
 
     for ent in ent_from_query:
         ent_from_query_dict[ent] = []
-        results_node = await entity_name_vdb.query(ent, top_k=query_param.top_k)
+        results_node = await entity_name_vdb.query(
+            ent, top_k=query_param.top_k, metadata_filter=query_param.metadata_filter
+        )
         # results_node の例（distance付き）
         # [{'entity_name': '"映画"', 'distance': 0.85}, {'entity_name': '"散歩"', 'distance': 0.72}, ...]
 
@@ -1324,7 +1332,9 @@ async def _build_mini_query_context(
     )
 
     results_edge = await relationships_vdb.query(
-        originalquery, top_k=len(ent_from_query) * query_param.top_k
+        originalquery,
+        top_k=len(ent_from_query) * query_param.top_k,
+        metadata_filter=query_param.metadata_filter,
     )
     goodedge = []
     badedge = []
@@ -1377,7 +1387,11 @@ async def _build_mini_query_context(
 
     scorednode2chunk(ent_from_query_dict, scored_edged_reasoning_path)
 
-    results = await chunks_vdb.query(originalquery, top_k=int(query_param.top_k / 2))
+    results = await chunks_vdb.query(
+        originalquery,
+        top_k=int(query_param.top_k / 2),
+        metadata_filter=query_param.metadata_filter,
+    )
     chunks_ids = [r["id"] for r in results]
     final_chunk_id = kwd2chunk(
         ent_from_query_dict, chunks_ids, chunk_nums=int(query_param.top_k / 2)
