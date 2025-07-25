@@ -1,3 +1,74 @@
+feature/jules-integrationブランチで
+メタデータフィルターと
+タイムスタンプフィルター
+を実装したので、テストしてみたい。
+※影響がないようにブランチを切った。
+
+```
+from minirag import MiniRAG, QueryParam
+import os
+import asyncio
+from datetime import datetime, timedelta
+
+# 登録するドキュメントとメタデータ
+documents = [
+    {"doc_id": "doc1", "content": "今日は東京でとても良い天気です。", "metadata": {"category": "weather", "city": "Tokyo"}},
+    {"doc_id": "doc2", "content": "昨日の大阪は雨でした。", "metadata": {"category": "weather", "city": "Osaka"}},
+    {"doc_id": "doc3", "content": "日本の首都は東京です。", "metadata": {"category": "geography", "country": "Japan"}},
+]
+
+contents_to_insert = [doc["content"] for doc in documents]
+ids_to_insert = [doc["doc_id"] for doc in documents]
+metadatas_to_insert = [doc["metadata"] for doc in documents]
+
+# RAGシステムをセットアップ
+try:
+    rag = await setup_rag_system()
+    print("------------------------- MiniRAGが初期化されました！ -------------------------")
+except Exception as e:
+    print(f"RAGシステムのセットアップに失敗しました: {e}")
+
+# メタデータを含めてデータを登録
+await rag.ainsert(contents_to_insert, ids=ids_to_insert, metadatas=metadatas_to_insert)
+print("データの登録が完了しました。")
+
+# メタデータでフィルタリングして検索
+# 1. 'weather' カテゴリのみを検索
+print("\n'weather'カテゴリで検索:")
+query_param_weather = QueryParam(
+    mode="light",
+    metadata_filter={"category": "weather"}
+)
+results_weather = await rag.aquery("今日の天気は？", param=query_param_weather)
+print(results_weather)
+
+# 2. 'geography' カテゴリかつ 'Japan' のみを検索
+print("\n'geography'カテゴリかつ'Japan'で検索:")
+query_param_geo = QueryParam(
+    mode="light",
+    metadata_filter={"category": "geography", "country": "Japan"}
+)
+results_geo = await rag.aquery("日本の首都は？", param=query_param_geo)
+print(results_geo)
+
+# 3. メタデータフィルタリングなしで検索
+print("\nフィルタリングなしで検索:")
+results_all = await rag.aquery("東京について教えて")
+print(results_all)
+
+# 4. 時間でフィルタリングして検索
+print("\n1分前以降に登録されたデータのみを検索:")
+one_minute_ago = (datetime.now() - timedelta(minutes=1)).isoformat()
+query_param_time = QueryParam(
+    mode="light",
+    start_time=one_minute_ago
+)
+results_time = await rag.aquery("東京について教えて", param=query_param_time)
+print(results_time)
+```
+
+
+
 # MiniRAG: 極めてシンプルな検索強化生成に向けて
 
 ![MiniRAG](https://files.mdnice.com/user/87760/ff711e74-c382-4432-bec2-e6f2aa787df1.jpg)
