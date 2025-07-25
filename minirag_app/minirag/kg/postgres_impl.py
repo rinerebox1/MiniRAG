@@ -407,18 +407,36 @@ class PGVectorStorage(BaseVectorStorage):
         logger.info("vector data had been saved into postgresql db!")
 
     #################### query method ###############
-    async def query(self, query: str, top_k=5) -> Union[dict, list[dict]]:
+    async def query(self, query: str, top_k=5, start_time: str = None, end_time: str = None) -> Union[dict, list[dict]]:
         """从向量数据库中查询数据"""
         embeddings = await self.embedding_func([query])
         embedding = embeddings[0]
         embedding_string = ",".join(map(str, embedding))
 
-        sql = SQL_TEMPLATES[self.namespace].format(embedding_string=embedding_string)
+        # タイムスタンプのフィルタリング条件を追加
+        timestamp_filter = ""
         params = {
             "workspace": self.db.workspace,
             "better_than_threshold": self.cosine_better_than_threshold,
             "top_k": top_k,
         }
+
+        if start_time and end_time:
+            timestamp_filter = "AND create_time BETWEEN $4 AND $5"
+            params["start_time"] = start_time
+            params["end_time"] = end_time
+        elif start_time:
+            timestamp_filter = "AND create_time >= $4"
+            params["start_time"] = start_time
+        elif end_time:
+            timestamp_filter = "AND create_time <= $4"
+            params["end_time"] = end_time
+
+        sql = SQL_TEMPLATES[self.namespace].format(
+            embedding_string=embedding_string,
+            timestamp_filter=timestamp_filter
+        )
+
         results = await self.db.query(sql, params=params, multirows=True)
         return results
 
@@ -1292,24 +1310,24 @@ SQL_TEMPLATES = {
     # SQL for VectorStorage
     # 修正: distance も SELECT するようにして追加
     "entities": """SELECT entity_name, distance FROM
-        (SELECT id, entity_name, 1 - (content_vector <=> '[{embedding_string}]'::vector) as distance
+        (SELECT id, entity_name, create_time, 1 - (content_vector <=> '[{embedding_string}]'::vector) as distance
         FROM LIGHTRAG_VDB_ENTITY where workspace=$1)
-        WHERE distance>$2 ORDER BY distance DESC  LIMIT $3
+        WHERE distance>$2 {timestamp_filter} ORDER BY distance DESC  LIMIT $3
        """,
     # 修正: エンティティ名のベクトル検索を追加（distanceも含める）
     "entities_name": """SELECT entity_name, distance FROM
-        (SELECT id, entity_name, 1 - (content_vector <=> '[{embedding_string}]'::vector) as distance
+        (SELECT id, entity_name, create_time, 1 - (content_vector <=> '[{embedding_string}]'::vector) as distance
         FROM LIGHTRAG_VDB_ENTITY where workspace=$1)
-        WHERE distance>$2 ORDER BY distance DESC  LIMIT $3
+        WHERE distance>$2 {timestamp_filter} ORDER BY distance DESC  LIMIT $3
        """,
     "relationships": """SELECT source_id as src_id, target_id as tgt_id FROM
-        (SELECT id, source_id,target_id, 1 - (content_vector <=> '[{embedding_string}]'::vector) as distance
+        (SELECT id, source_id,target_id, create_time, 1 - (content_vector <=> '[{embedding_string}]'::vector) as distance
         FROM LIGHTRAG_VDB_RELATION where workspace=$1)
-        WHERE distance>$2 ORDER BY distance DESC  LIMIT $3
+        WHERE distance>$2 {timestamp_filter} ORDER BY distance DESC  LIMIT $3
        """,
     "chunks": """SELECT id FROM
-        (SELECT id, 1 - (content_vector <=> '[{embedding_string}]'::vector) as distance
+        (SELECT id, create_time, 1 - (content_vector <=> '[{embedding_string}]'::vector) as distance
         FROM LIGHTRAG_DOC_CHUNKS where workspace=$1)
-        WHERE distance>$2 ORDER BY distance DESC  LIMIT $3
+        WHERE distance>$2 {timestamp_filter} ORDER BY distance DESC  LIMIT $3
        """,
 }
