@@ -324,6 +324,7 @@ class PGVectorStorage(BaseVectorStorage):
                 "full_doc_id": item["full_doc_id"],
                 "content": item["content"],
                 "content_vector": json.dumps(item["__vector__"].tolist()),
+                "meta": json.dumps(item.get("metadata", {})),
             }
         except Exception as e:
             logger.error(f"Error to prepare upsert sql: {e}")
@@ -522,13 +523,14 @@ class PGDocStatusStorage(DocStatusStorage):
         Args:
             data: Dictionary of document IDs and their status data
         """
-        sql = """insert into LIGHTRAG_DOC_STATUS(workspace,id,content_summary,content_length,chunks_count,status)
-                 values($1,$2,$3,$4,$5,$6)
+        sql = """insert into LIGHTRAG_DOC_STATUS(workspace,id,content_summary,content_length,chunks_count,status,meta)
+                 values($1,$2,$3,$4,$5,$6,$7)
                   on conflict(id,workspace) do update set
                   content_summary = EXCLUDED.content_summary,
                   content_length = EXCLUDED.content_length,
                   chunks_count = EXCLUDED.chunks_count,
                   status = EXCLUDED.status,
+                  meta = EXCLUDED.meta,
                   updated_at = CURRENT_TIMESTAMP"""
         for k, v in data.items():
             # chunks_count is optional
@@ -539,8 +541,9 @@ class PGDocStatusStorage(DocStatusStorage):
                     "id": k,
                     "content_summary": v["content_summary"],
                     "content_length": v["content_length"],
-                    "chunks_count": v["chunks_count"] if "chunks_count" in v else -1,
+                    "chunks_count": v.get("chunks_count", -1),
                     "status": v["status"],
+                    "meta": json.dumps(v.get("metadata", {})),
                 },
             )
         return data
@@ -1177,6 +1180,7 @@ TABLES = {
                     tokens INTEGER,
                     content TEXT,
                     content_vector VECTOR,
+                    meta JSONB,
                     create_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     update_time TIMESTAMP,
 	                CONSTRAINT LIGHTRAG_DOC_CHUNKS_PK PRIMARY KEY (workspace, id)
@@ -1227,6 +1231,7 @@ TABLES = {
 	               content_length int4 NULL,
 	               chunks_count int4 NULL,
 	               status varchar(64) NULL,
+                   meta JSONB,
 	               created_at timestamp DEFAULT CURRENT_TIMESTAMP NULL,
 	               updated_at timestamp DEFAULT CURRENT_TIMESTAMP NULL,
 	               CONSTRAINT LIGHTRAG_DOC_STATUS_PK PRIMARY KEY (workspace, id)
@@ -1275,14 +1280,15 @@ SQL_TEMPLATES = {
                                       update_time = CURRENT_TIMESTAMP
                                      """,
     "upsert_chunk": """INSERT INTO LIGHTRAG_DOC_CHUNKS (workspace, id, tokens,
-                      chunk_order_index, full_doc_id, content, content_vector)
-                      VALUES ($1, $2, $3, $4, $5, $6, $7)
+                      chunk_order_index, full_doc_id, content, content_vector, meta)
+                      VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
                       ON CONFLICT (workspace,id) DO UPDATE
                       SET tokens=EXCLUDED.tokens,
                       chunk_order_index=EXCLUDED.chunk_order_index,
                       full_doc_id=EXCLUDED.full_doc_id,
                       content = EXCLUDED.content,
                       content_vector=EXCLUDED.content_vector,
+                      meta=EXCLUDED.meta,
                       update_time = CURRENT_TIMESTAMP
                      """,
     "upsert_entity": """INSERT INTO LIGHTRAG_VDB_ENTITY (workspace, id, entity_name, content, content_vector)
