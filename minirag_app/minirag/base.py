@@ -66,7 +66,7 @@ class BaseVectorStorage(StorageNameSpace):
     meta_fields: set = field(default_factory=set)
 
     async def query(
-        self, query: str, top_k: int, metadata_filter: dict | None = None
+        self, query: str, top_k: int, metadata_filter: dict | None = None, start_time: Optional[str] = None, end_time: Optional[str] = None
     ) -> list[dict]:
         raise NotImplementedError
 

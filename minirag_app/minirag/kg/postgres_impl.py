@@ -409,7 +409,7 @@ class PGVectorStorage(BaseVectorStorage):
 
     #################### query method ###############
     async def query(
-        self, query: str, top_k=5, metadata_filter: dict | None = None
+        self, query: str, top_k=5, metadata_filter: dict | None = None, start_time: str = None, end_time: str = None
     ) -> Union[dict, list[dict]]:
         """从向量数据库中查询数据"""
         embeddings = await self.embedding_func([query])
@@ -418,21 +418,43 @@ class PGVectorStorage(BaseVectorStorage):
 
         sql = SQL_TEMPLATES[self.namespace].format(embedding_string=embedding_string)
 
+        # Build additional filter conditions
+        additional_filters = []
+        
         # Add metadata filtering
         if metadata_filter:
             metadata_where_clause = " AND ".join(
                 [f"meta->>'{key}' = '{value}'" for key, value in metadata_filter.items()]
             )
-            # a bit hacky, but it works for now
-            sql = sql.replace(
-                "WHERE distance>", f" AND {metadata_where_clause} WHERE distance>"
-            )
+            additional_filters.append(metadata_where_clause)
 
         params = {
             "workspace": self.db.workspace,
             "better_than_threshold": self.cosine_better_than_threshold,
             "top_k": top_k,
         }
+
+        # Add timestamp filtering
+        param_counter = 4  # パラメータの番号を追跡
+        if start_time and end_time:
+            timestamp_filter = f"create_time BETWEEN ${param_counter} AND ${param_counter + 1}"
+            additional_filters.append(timestamp_filter)
+            params["start_time"] = start_time
+            params["end_time"] = end_time
+        elif start_time:
+            timestamp_filter = f"create_time >= ${param_counter}"
+            additional_filters.append(timestamp_filter)
+            params["start_time"] = start_time
+        elif end_time:
+            timestamp_filter = f"create_time <= ${param_counter}"
+            additional_filters.append(timestamp_filter)
+            params["end_time"] = end_time
+
+        # Apply all filters to SQL
+        if additional_filters:
+            combined_filters = " AND ".join(additional_filters)
+            sql = sql.replace("WHERE distance>", f" AND {combined_filters} WHERE distance>")
+
         results = await self.db.query(sql, params=params, multirows=True)
         return results
 
