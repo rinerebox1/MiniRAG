@@ -2,7 +2,7 @@ feature/jules-integrationブランチで
 メタデータフィルターと
 タイムスタンプフィルター
 を実装したので、テストしてみたい。
-※影響がないようにブランチを切った。
+※影響がないようにブランチを切った。問題なければ main 以外のブランチを消して、メモリームの方も更新する。
 
 ```
 from minirag import MiniRAG, QueryParam
