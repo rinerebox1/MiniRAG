@@ -12,8 +12,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 ENV PATH="/root/.cargo/bin:${PATH}"
 
-# Copy minimal build context (キャッシュ効率)
+# Copy requirements first (依存関係のインストールを先に実行してキャッシュを活用)
 COPY requirements.txt .
+
+# 依存関係をインストール（ソースコード変更時も再実行されない）
+# タイムアウト設定とリトライ機能を追加、分割インストールで安定性向上
+RUN pip install --user --no-cache-dir --timeout=600 --retries=5 -r requirements.txt
+RUN pip install --user --no-cache-dir --timeout=600 --retries=5 jupyter notebook
+RUN pip install --user --no-cache-dir --timeout=600 --retries=5 transformers torch sentence-transformers
+RUN pip install --user --no-cache-dir --timeout=600 --retries=5 openai nano-vectordb asyncpg psycopg "psycopg[binary,pool]"
+
+# setup.pyとソースコードをコピー（この後のレイヤーはソースコード変更時に再実行される）
 COPY setup.py .
 COPY minirag ./minirag
 
@@ -22,11 +31,8 @@ COPY minirag ./minirag
 # →他にも色々な修正が必要だったため、コードを修正して上書きした(minirag_app/minirag/kg/postgres_impl.py)。sed コマンドは残しておく
 # RUN sed -i 's/where workspace=$1 and status=$1/where workspace=$1 and status=$2/' minirag/kg/postgres_impl.py
 
-RUN pip install --user --no-cache-dir -r requirements.txt \
- && pip install --user --no-cache-dir jupyter notebook \
- && pip install --user --no-cache-dir transformers torch sentence-transformers \
- && pip install --user --no-cache-dir openai nano-vectordb asyncpg psycopg "psycopg[binary,pool]" \
- && pip install --user --no-cache-dir .
+# 最後にローカルパッケージをインストール（ソースコード変更時のみ再実行）
+RUN pip install --user --no-cache-dir .
 
 ########## Runtime stage ##########
 FROM python:3.11-slim
