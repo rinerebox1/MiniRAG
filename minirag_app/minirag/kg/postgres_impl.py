@@ -271,6 +271,7 @@ class PGKVStorage(BaseKVStorage):
     ################ INSERT METHODS ################
     async def upsert(self, data: Dict[str, dict]):
         if self.namespace == "text_chunks":
+            # text_chunks are upserted through PGVectorStorage
             pass
         elif self.namespace == "full_docs":
             for k, v in data.items():
@@ -279,6 +280,7 @@ class PGKVStorage(BaseKVStorage):
                     "id": k,
                     "content": v["content"],
                     "workspace": self.db.workspace,
+                    "metadata": json.dumps(v.get("metadata", {})),
                 }
                 await self.db.execute(upsert_sql, _data)
         elif self.namespace == "llm_response_cache":
@@ -324,6 +326,7 @@ class PGVectorStorage(BaseVectorStorage):
                 "full_doc_id": item["full_doc_id"],
                 "content": item["content"],
                 "content_vector": json.dumps(item["__vector__"].tolist()),
+                "metadata": json.dumps(item.get("metadata", {})),
             }
         except Exception as e:
             logger.error(f"Error to prepare upsert sql: {e}")
@@ -407,19 +410,55 @@ class PGVectorStorage(BaseVectorStorage):
         logger.info("vector data had been saved into postgresql db!")
 
     #################### query method ###############
-    async def query(self, query: str, top_k=5) -> Union[dict, list[dict]]:
-        """从向量数据库中查询数据"""
+    async def query(
+        self,
+        query: str,
+        top_k=5,
+        metadata_filter: dict = None,
+        start_time: str = None,
+        end_time: str = None,
+    ) -> Union[dict, list[dict]]:
+        """向量数据库を検索"""
         embeddings = await self.embedding_func([query])
         embedding = embeddings[0]
         embedding_string = ",".join(map(str, embedding))
 
-        sql = SQL_TEMPLATES[self.namespace].format(embedding_string=embedding_string)
-        params = {
-            "workspace": self.db.workspace,
-            "better_than_threshold": self.cosine_better_than_threshold,
-            "top_k": top_k,
-        }
-        results = await self.db.query(sql, params=params, multirows=True)
+        base_sql = SQL_TEMPLATES[self.namespace]
+
+        # WHERE句を動的に構築
+        where_clauses = ["workspace=$1", "distance>$2"]
+        params = [self.db.workspace, self.cosine_better_than_threshold]
+
+        param_idx = 3 # パラメータインデックスは$3から開始
+
+        if metadata_filter:
+            for key, value in metadata_filter.items():
+                where_clauses.append(f"metadata->>'{key}' = ${param_idx}")
+                params.append(str(value))
+                param_idx += 1
+
+        if start_time:
+            where_clauses.append(f"created_at >= ${param_idx}")
+            params.append(start_time)
+            param_idx += 1
+
+        if end_time:
+            where_clauses.append(f"created_at <= ${param_idx}")
+            params.append(end_time)
+            param_idx += 1
+
+        # SQLクエリを組み立て
+        sql = base_sql.format(
+            embedding_string=embedding_string,
+            where_clause=" AND ".join(where_clauses)
+        )
+
+        # LIMIT句を追加
+        sql += f" ORDER BY distance DESC LIMIT ${param_idx}"
+        params.append(top_k)
+
+        # クエリ実行
+        results = await self.db.query(sql, params, multirows=True)
         return results
 
 
@@ -470,25 +509,23 @@ class PGDocStatusStorage(DocStatusStorage):
         # Result is like [{'id': 'id1', 'status': 'PENDING', 'updated_at': '2023-07-01 00:00:00'}, {'id': 'id2', 'status': 'PENDING', 'updated_at': '2023-07-01 00:00:00'}, ...]
         # Converting to be a dict
 
-        # 修正点2: 辞書内包表記からforループに変更し、正常なコードのロジックを再現
         processed_docs = {}
-        for element in db_result:
-            # 修正点3: 'content' がなければ 'content_summary' で代用するロジックを追加
-            # .get() を使うことで、キーが存在しなくてもエラーにならない
-            content = element.get("content")
-            if not content:
-                content = element.get("content_summary", "") # フォールバック
+        if db_result:
+            for element in db_result:
+                content = element.get("content")
+                if not content:
+                    content = element.get("content_summary", "")
 
-            # 修正点4: DocProcessingStatus に必須の 'content' 引数を渡す
-            processed_docs[element["id"]] = DocProcessingStatus(
-                content=content,
-                content_summary=element["content_summary"],
-                content_length=element["content_length"],
-                status=element["status"],
-                created_at=element["created_at"],
-                updated_at=element["updated_at"],
-                chunks_count=element["chunks_count"],
-            )
+                processed_docs[element["id"]] = DocProcessingStatus(
+                    content=content,
+                    content_summary=element["content_summary"],
+                    content_length=element["content_length"],
+                    status=element["status"],
+                    created_at=element["created_at"],
+                    updated_at=element["updated_at"],
+                    chunks_count=element["chunks_count"],
+                    metadata=element.get("metadata", {}),
+                )
         return processed_docs
 
     async def get_failed_docs(self) -> Dict[str, DocProcessingStatus]:
@@ -509,13 +546,14 @@ class PGDocStatusStorage(DocStatusStorage):
         Args:
             data: Dictionary of document IDs and their status data
         """
-        sql = """insert into LIGHTRAG_DOC_STATUS(workspace,id,content_summary,content_length,chunks_count,status)
-                 values($1,$2,$3,$4,$5,$6)
+        sql = """insert into LIGHTRAG_DOC_STATUS(workspace,id,content_summary,content_length,chunks_count,status, metadata)
+                 values($1,$2,$3,$4,$5,$6, $7)
                   on conflict(id,workspace) do update set
                   content_summary = EXCLUDED.content_summary,
                   content_length = EXCLUDED.content_length,
                   chunks_count = EXCLUDED.chunks_count,
                   status = EXCLUDED.status,
+                  metadata = EXCLUDED.metadata,
                   updated_at = CURRENT_TIMESTAMP"""
         for k, v in data.items():
             # chunks_count is optional
@@ -528,6 +566,7 @@ class PGDocStatusStorage(DocStatusStorage):
                     "content_length": v["content_length"],
                     "chunks_count": v["chunks_count"] if "chunks_count" in v else -1,
                     "status": v["status"],
+                    "metadata": json.dumps(v.get("metadata", {})),
                 },
             )
         return data
@@ -1149,9 +1188,9 @@ TABLES = {
                     workspace VARCHAR(255),
                     doc_name VARCHAR(1024),
                     content TEXT,
-                    meta JSONB,
-                    create_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    update_time TIMESTAMP,
+                    metadata JSONB,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP,
 	                CONSTRAINT LIGHTRAG_DOC_FULL_PK PRIMARY KEY (workspace, id)
                     )"""
     },
@@ -1164,8 +1203,9 @@ TABLES = {
                     tokens INTEGER,
                     content TEXT,
                     content_vector VECTOR,
-                    create_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    update_time TIMESTAMP,
+                    metadata JSONB,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP,
 	                CONSTRAINT LIGHTRAG_DOC_CHUNKS_PK PRIMARY KEY (workspace, id)
                     )"""
     },
@@ -1176,8 +1216,9 @@ TABLES = {
                     entity_name VARCHAR(255),
                     content TEXT,
                     content_vector VECTOR,
-                    create_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    update_time TIMESTAMP,
+                    metadata JSONB,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP,
 	                CONSTRAINT LIGHTRAG_VDB_ENTITY_PK PRIMARY KEY (workspace, id)
                     )"""
     },
@@ -1189,8 +1230,9 @@ TABLES = {
                     target_id VARCHAR(256),
                     content TEXT,
                     content_vector VECTOR,
-                    create_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    update_time TIMESTAMP,
+                    metadata JSONB,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP,
 	                CONSTRAINT LIGHTRAG_VDB_RELATION_PK PRIMARY KEY (workspace, id)
                     )"""
     },
@@ -1201,8 +1243,8 @@ TABLES = {
 	                mode varchar(32) NOT NULL,
                     original_prompt TEXT,
                     return_value TEXT,
-                    create_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    update_time TIMESTAMP,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP,
 	                CONSTRAINT LIGHTRAG_LLM_CACHE_PK PRIMARY KEY (workspace, mode, id)
                     )"""
     },
@@ -1214,6 +1256,7 @@ TABLES = {
 	               content_length int4 NULL,
 	               chunks_count int4 NULL,
 	               status varchar(64) NULL,
+                   metadata JSONB,
 	               created_at timestamp DEFAULT CURRENT_TIMESTAMP NULL,
 	               updated_at timestamp DEFAULT CURRENT_TIMESTAMP NULL,
 	               CONSTRAINT LIGHTRAG_DOC_STATUS_PK PRIMARY KEY (workspace, id)
@@ -1248,10 +1291,10 @@ SQL_TEMPLATES = {
                                  FROM LIGHTRAG_LLM_CACHE WHERE workspace=$1 AND mode= IN ({ids})
                                 """,
     "filter_keys": "SELECT id FROM {table_name} WHERE workspace=$1 AND id IN ({ids})",
-    "upsert_doc_full": """INSERT INTO LIGHTRAG_DOC_FULL (id, content, workspace)
-                        VALUES ($1, $2, $3)
+    "upsert_doc_full": """INSERT INTO LIGHTRAG_DOC_FULL (id, content, workspace, metadata)
+                        VALUES ($1, $2, $3, $4)
                         ON CONFLICT (workspace,id) DO UPDATE
-                           SET content = $2, update_time = CURRENT_TIMESTAMP
+                           SET content = EXCLUDED.content, metadata = EXCLUDED.metadata, updated_at = CURRENT_TIMESTAMP
                        """,
     "upsert_llm_response_cache": """INSERT INTO LIGHTRAG_LLM_CACHE(workspace,id,original_prompt,return_value,mode)
                                       VALUES ($1, $2, $3, $4, $5)
@@ -1259,18 +1302,19 @@ SQL_TEMPLATES = {
                                       SET original_prompt = EXCLUDED.original_prompt,
                                       return_value=EXCLUDED.return_value,
                                       mode=EXCLUDED.mode,
-                                      update_time = CURRENT_TIMESTAMP
+                                      updated_at = CURRENT_TIMESTAMP
                                      """,
     "upsert_chunk": """INSERT INTO LIGHTRAG_DOC_CHUNKS (workspace, id, tokens,
-                      chunk_order_index, full_doc_id, content, content_vector)
-                      VALUES ($1, $2, $3, $4, $5, $6, $7)
+                      chunk_order_index, full_doc_id, content, content_vector, metadata)
+                      VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
                       ON CONFLICT (workspace,id) DO UPDATE
                       SET tokens=EXCLUDED.tokens,
                       chunk_order_index=EXCLUDED.chunk_order_index,
                       full_doc_id=EXCLUDED.full_doc_id,
                       content = EXCLUDED.content,
                       content_vector=EXCLUDED.content_vector,
-                      update_time = CURRENT_TIMESTAMP
+                      metadata=EXCLUDED.metadata,
+                      updated_at = CURRENT_TIMESTAMP
                      """,
     "upsert_entity": """INSERT INTO LIGHTRAG_VDB_ENTITY (workspace, id, entity_name, content, content_vector)
                       VALUES ($1, $2, $3, $4, $5)
@@ -1290,26 +1334,24 @@ SQL_TEMPLATES = {
                       content_vector=EXCLUDED.content_vector, update_time = CURRENT_TIMESTAMP
                      """,
     # SQL for VectorStorage
-    # 修正: distance も SELECT するようにして追加
     "entities": """SELECT entity_name, distance FROM
-        (SELECT id, entity_name, 1 - (content_vector <=> '[{embedding_string}]'::vector) as distance
-        FROM LIGHTRAG_VDB_ENTITY where workspace=$1)
-        WHERE distance>$2 ORDER BY distance DESC  LIMIT $3
+        (SELECT id, entity_name, metadata, created_at, 1 - (content_vector <=> '[{embedding_string}]'::vector) as distance
+        FROM LIGHTRAG_VDB_ENTITY) as subquery
+        WHERE {where_clause}
        """,
-    # 修正: エンティティ名のベクトル検索を追加（distanceも含める）
     "entities_name": """SELECT entity_name, distance FROM
-        (SELECT id, entity_name, 1 - (content_vector <=> '[{embedding_string}]'::vector) as distance
-        FROM LIGHTRAG_VDB_ENTITY where workspace=$1)
-        WHERE distance>$2 ORDER BY distance DESC  LIMIT $3
+        (SELECT id, entity_name, metadata, created_at, 1 - (content_vector <=> '[{embedding_string}]'::vector) as distance
+        FROM LIGHTRAG_VDB_ENTITY) as subquery
+        WHERE {where_clause}
        """,
     "relationships": """SELECT source_id as src_id, target_id as tgt_id FROM
-        (SELECT id, source_id,target_id, 1 - (content_vector <=> '[{embedding_string}]'::vector) as distance
-        FROM LIGHTRAG_VDB_RELATION where workspace=$1)
-        WHERE distance>$2 ORDER BY distance DESC  LIMIT $3
+        (SELECT id, source_id, target_id, metadata, created_at, 1 - (content_vector <=> '[{embedding_string}]'::vector) as distance
+        FROM LIGHTRAG_VDB_RELATION) as subquery
+        WHERE {where_clause}
        """,
     "chunks": """SELECT id FROM
-        (SELECT id, 1 - (content_vector <=> '[{embedding_string}]'::vector) as distance
-        FROM LIGHTRAG_DOC_CHUNKS where workspace=$1)
-        WHERE distance>$2 ORDER BY distance DESC  LIMIT $3
+        (SELECT id, metadata, created_at, 1 - (content_vector <=> '[{embedding_string}]'::vector) as distance
+        FROM LIGHTRAG_DOC_CHUNKS) as subquery
+        WHERE {where_clause}
        """,
 }

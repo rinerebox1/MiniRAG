@@ -432,6 +432,13 @@ class MiniRAG:
             input = list(set(clean_text(doc) for doc in input))
             contents = {compute_mdhash_id(doc, prefix="doc-"): doc for doc in input}
 
+        if metadatas:
+            contents_with_meta = {
+                id_: (doc, meta) for id_, doc, meta in zip(ids, input, metadatas)
+            }
+        else:
+            contents_with_meta = {}
+
         unique_contents = {
             id_: content
             for content, id_ in {
@@ -505,7 +512,7 @@ class MiniRAG:
                     compute_mdhash_id(dp["content"], prefix="chunk-"): {
                         **dp,
                         "full_doc_id": doc_id,
-                        "metadata": status_doc.metadata,
+                        "metadata": status_doc.metadata or {},
                     }
                     for dp in self.chunking_func(
                         status_doc.content,
@@ -517,7 +524,7 @@ class MiniRAG:
                 await asyncio.gather(
                     self.chunks_vdb.upsert(chunks),
                     self.full_docs.upsert(
-                        {doc_id: {"content": status_doc.content, "metadata": status_doc.metadata}}
+                        {doc_id: {"content": status_doc.content, "metadata": status_doc.metadata or {}}}
                     ),
                     self.text_chunks.upsert(chunks),
                 )
