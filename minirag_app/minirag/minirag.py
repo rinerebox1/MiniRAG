@@ -348,13 +348,16 @@ class MiniRAG:
         split_by_character: str | None = None,
         split_by_character_only: bool = False,
         ids: str | list[str] | None = None,
+        metadatas: list[dict] | None = None,
     ) -> None:
         if isinstance(input, str):
             input = [input]
         if isinstance(ids, str):
             ids = [ids]
+        if isinstance(metadatas, dict):
+            metadatas = [metadatas]
 
-        await self.apipeline_enqueue_documents(input, ids)
+        await self.apipeline_enqueue_documents(input, ids, metadatas)
         await self.apipeline_process_enqueue_documents(
             split_by_character, split_by_character_only
         )
@@ -390,7 +393,10 @@ class MiniRAG:
         await self._insert_done()
 
     async def apipeline_enqueue_documents(
-        self, input: str | list[str], ids: list[str] | None = None
+        self,
+        input: str | list[str],
+        ids: list[str] | None = None,
+        metadatas: list[dict] | None = None,
     ) -> None:
         """
         Pipeline for Processing Documents
@@ -405,13 +411,23 @@ class MiniRAG:
             input = [input]
         if isinstance(ids, str):
             ids = [ids]
+        if isinstance(metadatas, dict):
+            metadatas = [metadatas]
 
         if ids is not None:
             if len(ids) != len(input):
                 raise ValueError("Number of IDs must match the number of documents")
             if len(ids) != len(set(ids)):
                 raise ValueError("IDs must be unique")
+            if metadatas and len(metadatas) != len(input):
+                raise ValueError("Number of metadatas must match the number of documents")
             contents = {id_: doc for id_, doc in zip(ids, input)}
+            if metadatas:
+                contents_with_meta = {
+                    id_: (doc, meta)
+                    for id_, doc, meta in zip(ids, input, metadatas)
+                }
+
         else:
             input = list(set(clean_text(doc) for doc in input))
             contents = {compute_mdhash_id(doc, prefix="doc-"): doc for doc in input}
@@ -430,6 +446,9 @@ class MiniRAG:
                 "status": DocStatus.PENDING,
                 "created_at": datetime.now().isoformat(),
                 "updated_at": datetime.now().isoformat(),
+                "metadata": contents_with_meta.get(id_, (None, {}))[1]
+                if metadatas
+                else {},
             }
             for id_, content in unique_contents.items()
         }
@@ -486,6 +505,7 @@ class MiniRAG:
                     compute_mdhash_id(dp["content"], prefix="chunk-"): {
                         **dp,
                         "full_doc_id": doc_id,
+                        "metadata": status_doc.metadata,
                     }
                     for dp in self.chunking_func(
                         status_doc.content,
@@ -496,7 +516,9 @@ class MiniRAG:
                 }
                 await asyncio.gather(
                     self.chunks_vdb.upsert(chunks),
-                    self.full_docs.upsert({doc_id: {"content": status_doc.content}}),
+                    self.full_docs.upsert(
+                        {doc_id: {"content": status_doc.content, "metadata": status_doc.metadata}}
+                    ),
                     self.text_chunks.upsert(chunks),
                 )
                 await self.doc_status.upsert(
@@ -537,7 +559,7 @@ class MiniRAG:
 
     async def aquery(self, query: str, param: QueryParam = QueryParam()):
         if param.mode == "light":
-            response = await hybrid_query(
+            response, source = await hybrid_query(
                 query,
                 self.chunk_entity_relation_graph,
                 self.entities_vdb,
@@ -548,7 +570,7 @@ class MiniRAG:
             )
         elif param.mode == "mini":
             print("★デバッグ(minirag.py): mini mode")
-            response = await minirag_query(
+            response, source = await minirag_query(
                 query,
                 self.chunk_entity_relation_graph,
                 self.entities_vdb,
@@ -561,7 +583,7 @@ class MiniRAG:
                 asdict(self),
             )
         elif param.mode == "naive":
-            response = await naive_query(
+            response, source = await naive_query(
                 query,
                 self.chunks_vdb,
                 self.text_chunks,
@@ -571,7 +593,7 @@ class MiniRAG:
         else:
             raise ValueError(f"Unknown mode {param.mode}")
         await self._query_done()
-        return response
+        return response, source
 
     async def _query_done(self):
         tasks = []

@@ -490,7 +490,10 @@ async def _build_local_query_context(
     text_chunks_db: BaseKVStorage[TextChunkSchema],
     query_param: QueryParam,
 ):
-    results = await entities_vdb.query(query, top_k=query_param.top_k)
+    results = await entities_vdb.query(
+        query, top_k=query_param.top_k, metadata_filter=query_param.metadata_filter,
+        start_time=query_param.start_time, end_time=query_param.end_time
+    )
 
     if not len(results):
         return None
@@ -762,7 +765,10 @@ async def _build_global_query_context(
     text_chunks_db: BaseKVStorage[TextChunkSchema],
     query_param: QueryParam,
 ):
-    results = await relationships_vdb.query(keywords, top_k=query_param.top_k)
+    results = await relationships_vdb.query(
+        keywords, top_k=query_param.top_k, metadata_filter=query_param.metadata_filter,
+        start_time=query_param.start_time, end_time=query_param.end_time
+    )
 
     if not len(results):
         return None
@@ -959,7 +965,7 @@ async def hybrid_query(
         # Handle parsing error
         except json.JSONDecodeError as e:
             print(f"JSON parsing error: {e}")
-            return PROMPTS["fail_response"]
+            return PROMPTS["fail_response"], []
     if ll_keywords:
         low_level_context = await _build_local_query_context(
             ll_keywords,
@@ -979,12 +985,12 @@ async def hybrid_query(
             query_param,
         )
 
-    context = combine_contexts(high_level_context, low_level_context)
+    context, source = combine_contexts(high_level_context, low_level_context)
 
     if query_param.only_need_context:
-        return context
+        return context, source
     if context is None:
-        return PROMPTS["fail_response"]
+        return PROMPTS["fail_response"], []
 
     sys_prompt_temp = PROMPTS["rag_response"]
     sys_prompt = sys_prompt_temp.format(
@@ -1004,7 +1010,7 @@ async def hybrid_query(
             .replace("</system>", "")
             .strip()
         )
-    return response
+    return response, source
 
 
 def combine_contexts(high_level_context, low_level_context):
@@ -1058,9 +1064,11 @@ def combine_contexts(high_level_context, low_level_context):
     )
     # Combine and deduplicate the sources
     combined_sources = process_combine_contexts(hl_sources, ll_sources)
+    source = combined_sources.split("\n")[1:]  # Remove header
+    source = [s.split(",")[1] for s in source if s] # Extract content
     combined_sources = chunking_by_token_size(combined_sources, max_token_size=2000)
     # Format the combined context
-    return f"""
+    response_context = f"""
 -----Entities-----
 ```csv
 {combined_entities}
@@ -1074,6 +1082,7 @@ def combine_contexts(high_level_context, low_level_context):
 {combined_sources}
 ```
 """
+    return response_context, source
 
 
 async def naive_query(
@@ -1084,9 +1093,12 @@ async def naive_query(
     global_config: dict,
 ):
     use_model_func = global_config["llm_model_func"]
-    results = await chunks_vdb.query(query, top_k=query_param.top_k)
+    results = await chunks_vdb.query(
+        query, top_k=query_param.top_k, metadata_filter=query_param.metadata_filter,
+        start_time=query_param.start_time, end_time=query_param.end_time
+    )
     if not len(results):
-        return PROMPTS["fail_response"]
+        return PROMPTS["fail_response"], []
     chunks_ids = [r["id"] for r in results]
 
     chunks = await text_chunks_db.get_by_ids(chunks_ids)
@@ -1098,8 +1110,9 @@ async def naive_query(
     )
     logger.info(f"Truncate {len(chunks)} to {len(maybe_trun_chunks)} chunks")
     section = "--New Chunk--\n".join([c["content"] for c in maybe_trun_chunks])
+    source = [c["content"] for c in maybe_trun_chunks]
     if query_param.only_need_context:
-        return section
+        return section, source
     sys_prompt_temp = PROMPTS["naive_rag_response"]
     sys_prompt = sys_prompt_temp.format(
         content_data=section, response_type=query_param.response_type
@@ -1121,7 +1134,7 @@ async def naive_query(
             .strip()
         )
 
-    return response
+    return response, source
 
 
 async def path2chunk(
@@ -1271,7 +1284,10 @@ async def _build_mini_query_context(
 
     for ent in ent_from_query:
         ent_from_query_dict[ent] = []
-        results_node = await entity_name_vdb.query(ent, top_k=query_param.top_k)
+        results_node = await entity_name_vdb.query(
+            ent, top_k=query_param.top_k, metadata_filter=query_param.metadata_filter,
+            start_time=query_param.start_time, end_time=query_param.end_time
+        )
         # results_node の例（distance付き）
         # [{'entity_name': '"映画"', 'distance': 0.85}, {'entity_name': '"散歩"', 'distance': 0.72}, ...]
 
@@ -1324,7 +1340,10 @@ async def _build_mini_query_context(
     )
 
     results_edge = await relationships_vdb.query(
-        originalquery, top_k=len(ent_from_query) * query_param.top_k
+        originalquery,
+        top_k=len(ent_from_query) * query_param.top_k,
+        metadata_filter=query_param.metadata_filter,
+        start_time=query_param.start_time, end_time=query_param.end_time
     )
     goodedge = []
     badedge = []
@@ -1377,29 +1396,36 @@ async def _build_mini_query_context(
 
     scorednode2chunk(ent_from_query_dict, scored_edged_reasoning_path)
 
-    results = await chunks_vdb.query(originalquery, top_k=int(query_param.top_k / 2))
+    results = await chunks_vdb.query(
+        originalquery,
+        top_k=int(query_param.top_k / 2),
+        metadata_filter=query_param.metadata_filter,
+        start_time=query_param.start_time, end_time=query_param.end_time
+    )
     chunks_ids = [r["id"] for r in results]
     final_chunk_id = kwd2chunk(
         ent_from_query_dict, chunks_ids, chunk_nums=int(query_param.top_k / 2)
     )
 
     if not len(results_node):
-        return None
+        return None, []
 
     if not len(results_edge):
-        return None
+        return None, []
 
     use_text_units = await asyncio.gather(
         *[text_chunks_db.get_by_id(id) for id in final_chunk_id]
     )
     text_units_section_list = [["id", "content"]]
+    source = []
 
     for i, t in enumerate(use_text_units):
         if t is not None:
             text_units_section_list.append([i, t["content"]])
+            source.append(t["content"])
     text_units_context = list_of_list_to_csv(text_units_section_list)
 
-    return f"""
+    response_context = f"""
 -----Entities-----
 ```csv
 {entities_context}
@@ -1409,6 +1435,7 @@ async def _build_mini_query_context(
 {text_units_context}
 ```
 """
+    return response_context, source
 
 
 async def minirag_query(  # MiniRAG
@@ -1465,9 +1492,9 @@ async def minirag_query(  # MiniRAG
         # Handle parsing error
         except Exception as e:
             print(f"JSON parsing error: {e}")
-            return PROMPTS["fail_response"]
+            return PROMPTS["fail_response"], []
 
-    context = await _build_mini_query_context(
+    context, source = await _build_mini_query_context(
         entities_from_query,
         type_keywords,
         query,
@@ -1482,9 +1509,9 @@ async def minirag_query(  # MiniRAG
     )
 
     if query_param.only_need_context:
-        return context
+        return context, source
     if context is None:
-        return PROMPTS["fail_response"]
+        return PROMPTS["fail_response"], []
 
     sys_prompt_temp = PROMPTS["rag_response"]
     sys_prompt = sys_prompt_temp.format(
@@ -1495,4 +1522,4 @@ async def minirag_query(  # MiniRAG
         system_prompt=sys_prompt,
     )
 
-    return response
+    return response, source
