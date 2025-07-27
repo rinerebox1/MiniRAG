@@ -8,32 +8,21 @@ from typing import Union, List, Dict, Set, Any, Tuple
 import numpy as np
 
 # ---------------------------------------------------------------------------
-# Utility helpers
+# Helper to adapt Python dict -> PostgreSQL jsonb via asyncpg
 # ---------------------------------------------------------------------------
+def _jsonb(obj: Any):
+    """Return a value acceptable for a `$n::jsonb` placeholder.
 
-
-def _ensure_jsonb(obj: Any) -> str:
-    """Return a JSON **string** suitable for a `jsonb` column without double-encoding.
-
-    Rules:
-    1. If *obj* is ``None`` → return an empty JSON object string ``"{}"``.
-    2. If *obj* is already ``str`` **and** can be parsed by ``json.loads`` → assume it
-       has been JSON-serialised once and return it unchanged.
-    3. Otherwise, serialise with ``json.dumps``.
-
-    This prevents accidental double encoding like
-    ``"\"{\"key\": \"value\"}\""`` which breaks JSONB queries.
+    * If *obj* is ``None`` → return '{}' (empty JSON object string)
+    * If it is already a ``str`` →そのまま返す（既に JSON シリアライズ済みとみなす）
+    * それ以外は ``json.dumps`` で 1 回だけ文字列化する
     """
     if obj is None:
         return "{}"
     if isinstance(obj, str):
-        try:
-            json.loads(obj)
-            return obj  # already JSON serialised
-        except json.JSONDecodeError:
-            # plain string – wrap it so it becomes valid JSON
-            return json.dumps(obj)
+        return obj
     return json.dumps(obj)
+
 
 import pipmaster as pm
 
@@ -330,7 +319,7 @@ class PGKVStorage(BaseKVStorage):
                     "id": k,
                     "content": v["content"],
                     "workspace": self.db.workspace,
-                    "metadata": _ensure_jsonb(v.get("metadata", {})),  # JSON文字列として渡す
+                    "metadata": _jsonb(v.get("metadata", {})),
                 }
                 await self.db.execute(upsert_sql, _data)
         elif self.namespace == "llm_response_cache":
@@ -343,6 +332,7 @@ class PGKVStorage(BaseKVStorage):
                         "original_prompt": v["original_prompt"],
                         "return_value": v["return"],
                         "mode": mode,
+                        "metadata": _jsonb(v.get("metadata", {})),
                     }
 
                     await self.db.execute(upsert_sql, _data)
@@ -388,7 +378,7 @@ class PGVectorStorage(BaseVectorStorage):
         try:
             upsert_sql = SQL_TEMPLATES["upsert_chunk"]
             # メタデータをJSON文字列として渡すが、データベース側でJSONBとして扱う
-            metadata = item.get("metadata", {})
+            metadata = _jsonb(item.get("metadata"))
             data = {
                 "workspace": self.db.workspace,
                 "id": item["__id__"],
@@ -397,7 +387,7 @@ class PGVectorStorage(BaseVectorStorage):
                 "full_doc_id": item["full_doc_id"],
                 "content": item["content"],
                 "content_vector": json.dumps(item["__vector__"].tolist()),
-                "metadata": _ensure_jsonb(metadata),  # JSON文字列として渡す
+                "metadata": metadata,
             }
             print(f"💾 Upserting chunk '{item['__id__'][:16]}...' with metadata: {item.get('metadata', {})}")
         except Exception as e:
@@ -779,7 +769,7 @@ class PGDocStatusStorage(DocStatusStorage):
                     "content_length": v["content_length"],
                     "chunks_count": v["chunks_count"] if "chunks_count" in v else -1,
                     "status": v["status"],
-                    "metadata": _ensure_jsonb(v.get("metadata", {})),  # JSON文字列として渡す
+                    "metadata": _jsonb(v.get("metadata", {})),
                 },
             )
         return data
