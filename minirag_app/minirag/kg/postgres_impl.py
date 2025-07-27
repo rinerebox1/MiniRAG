@@ -629,33 +629,6 @@ class PGVectorStorage(BaseVectorStorage):
                     print(f"     Extracted category: {dr.get('category')}")
                     print(f"     Distance: {dr.get('distance')}")
                     print(f"     Metadata type: {type(dr.get('metadata'))}")
-                    
-                # より安全なJSONBテスト
-                test_sql = """SELECT id, 
-                             metadata,
-                             metadata::text as metadata_text,
-                             jsonb_typeof(metadata) as metadata_type
-                             FROM LIGHTRAG_DOC_CHUNKS 
-                             WHERE workspace=$1 AND metadata IS NOT NULL 
-                             LIMIT 1"""
-                test_result = await self.db.query(test_sql, [self.db.workspace])
-                if test_result:
-                    print(f"🔍 JSONB structure analysis:")
-                    print(f"     metadata: {test_result.get('metadata')}")
-                    print(f"     metadata_text: {test_result.get('metadata_text')}")
-                    print(f"     metadata_type: {test_result.get('metadata_type')}")
-                    
-                    # metadata_typeがobjectの場合のみキーを取得
-                    if test_result.get('metadata_type') == 'object':
-                        keys_sql = """SELECT jsonb_object_keys(metadata) as key 
-                                     FROM LIGHTRAG_DOC_CHUNKS 
-                                     WHERE workspace=$1 AND metadata IS NOT NULL 
-                                     LIMIT 1"""
-                        keys_result = await self.db.query(keys_sql, [self.db.workspace], multirows=True)
-                        keys = [row['key'] for row in keys_result] if keys_result else []
-                        print(f"     keys: {keys}")
-                    else:
-                        print(f"     keys: N/A (metadata is not an object)")
             
             return results
         except Exception as e:
