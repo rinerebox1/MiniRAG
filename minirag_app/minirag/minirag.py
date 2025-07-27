@@ -349,6 +349,7 @@ class MiniRAG:
         split_by_character_only: bool = False,
         ids: str | list[str] | None = None,
         metadatas: list[dict] | None = None,
+        overwrite: bool = False,
     ) -> None:
         if isinstance(input, str):
             input = [input]
@@ -357,7 +358,7 @@ class MiniRAG:
         if isinstance(metadatas, dict):
             metadatas = [metadatas]
 
-        await self.apipeline_enqueue_documents(input, ids, metadatas)
+        await self.apipeline_enqueue_documents(input, ids, metadatas, overwrite)
         await self.apipeline_process_enqueue_documents(
             split_by_character, split_by_character_only
         )
@@ -397,6 +398,7 @@ class MiniRAG:
         input: str | list[str],
         ids: list[str] | None = None,
         metadatas: list[dict] | None = None,
+        overwrite: bool = False,
     ) -> None:
         """
         Pipeline for Processing Documents
@@ -461,25 +463,46 @@ class MiniRAG:
         }
 
         all_new_doc_ids = set(new_docs.keys())
-        # デバッグ用：filter_keysをバイパスして強制更新
-        print(f"Debug: Bypassing filter_keys for debugging metadata issues")
-        unique_new_doc_ids = all_new_doc_ids  # await self.doc_status.filter_keys(all_new_doc_ids)
+        
+        if overwrite:
+            # 上書きモード：重複チェックをスキップして全てのドキュメントを処理
+            unique_new_doc_ids = all_new_doc_ids
+            logger.info(f"Overwrite mode: Processing all {len(unique_new_doc_ids)} documents")
+        else:
+            # 通常モード：重複ドキュメントを除外
+            unique_new_doc_ids = await self.doc_status.filter_keys(all_new_doc_ids)
+            logger.info(f"Normal mode: Processing {len(unique_new_doc_ids)} new documents (filtered from {len(all_new_doc_ids)})")
 
-        # new_docs = {
-        #     doc_id: new_docs[doc_id]
-        #     for doc_id in unique_new_doc_ids
-        #     if doc_id in new_docs
-        # }
+        new_docs = {
+            doc_id: new_docs[doc_id]
+            for doc_id in unique_new_doc_ids
+            if doc_id in new_docs
+        }
         if not new_docs:
             logger.info("No new unique documents were found.")
             return
 
-        # デバッグ用：ドキュメントのメタデータをログ出力
-        for doc_id, doc_data in new_docs.items():
-            print(f"Debug: Inserting doc {doc_id} with metadata: {doc_data.get('metadata', {})}")
+        if overwrite and new_docs:
+            # 上書きモードの場合、既存のチャンクを削除
+            await self._delete_existing_chunks(list(new_docs.keys()))
         
         await self.doc_status.upsert(new_docs)
-        logger.info(f"Stored {len(new_docs)} new unique documents")
+        logger.info(f"Stored {len(new_docs)} documents (overwrite={overwrite})")
+
+    async def _delete_existing_chunks(self, doc_ids: list[str]) -> None:
+        """上書きモード用：指定されたドキュメントIDに関連する既存チャンクを削除"""
+        try:
+            # ベクターDBからチャンクを削除
+            if hasattr(self.chunks_vdb, 'delete_by_doc_ids'):
+                await self.chunks_vdb.delete_by_doc_ids(doc_ids)
+            
+            # テキストチャンクストレージからも削除
+            if hasattr(self.text_chunks, 'delete_by_doc_ids'):
+                await self.text_chunks.delete_by_doc_ids(doc_ids)
+                
+            logger.info(f"Deleted existing chunks for {len(doc_ids)} documents")
+        except Exception as e:
+            logger.warning(f"Failed to delete existing chunks: {e}. Proceeding with upsert.")
 
     async def apipeline_process_enqueue_documents(
         self,
@@ -514,6 +537,7 @@ class MiniRAG:
 
         for batch_idx, docs_batch in enumerate(docs_batches):
             for doc_id, status_doc in docs_batch:
+                logger.debug(f"Processing doc {doc_id}, metadata = {status_doc.metadata}")
                 chunks = {
                     compute_mdhash_id(dp["content"], prefix="chunk-"): {
                         **dp,
@@ -527,6 +551,7 @@ class MiniRAG:
                         self.tiktoken_model_name,
                     )
                 }
+                logger.debug(f"Created {len(chunks)} chunks for doc {doc_id}")
                 await asyncio.gather(
                     self.chunks_vdb.upsert(chunks),
                     self.full_docs.upsert(

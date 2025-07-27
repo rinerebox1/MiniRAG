@@ -319,6 +319,24 @@ class PGKVStorage(BaseKVStorage):
 
                     await self.db.execute(upsert_sql, _data)
 
+    async def delete_by_doc_ids(self, doc_ids: list[str]) -> None:
+        """指定されたドキュメントIDに関連するレコードを削除"""
+        if not doc_ids:
+            return
+            
+        doc_ids_str = ",".join([f"'{doc_id}'" for doc_id in doc_ids])
+        
+        if self.namespace == "full_docs":
+            sql = f"DELETE FROM LIGHTRAG_DOC_FULL WHERE workspace=$1 AND id IN ({doc_ids_str})"
+        elif self.namespace == "text_chunks":
+            sql = f"DELETE FROM LIGHTRAG_DOC_CHUNKS WHERE workspace=$1 AND full_doc_id IN ({doc_ids_str})"
+        else:
+            logger.warning(f"delete_by_doc_ids not implemented for namespace: {self.namespace}")
+            return
+            
+        await self.db.execute(sql, {"workspace": self.db.workspace})
+        logger.info(f"Deleted {self.namespace} records for doc_ids: {doc_ids}")
+
     async def index_done_callback(self):
         if self.namespace in ["full_docs", "text_chunks"]:
             logger.info("full doc and chunk data had been saved into postgresql db!")
@@ -350,7 +368,7 @@ class PGVectorStorage(BaseVectorStorage):
                 "content_vector": json.dumps(item["__vector__"].tolist()),
                 "metadata": json.dumps(item.get("metadata", {})),
             }
-            print(f"Upserting chunk with metadata: {item.get('metadata', {})}")
+            logger.debug(f"Upserting chunk with metadata: {item.get('metadata', {})}")
         except Exception as e:
             logger.error(f"Error to prepare upsert sql: {e}")
             print(item)
@@ -429,6 +447,29 @@ class PGVectorStorage(BaseVectorStorage):
 
             await self.db.execute(upsert_sql, data)
 
+    async def delete_by_doc_ids(self, doc_ids: list[str]) -> None:
+        """指定されたドキュメントIDに関連するベクターレコードを削除"""
+        if not doc_ids:
+            return
+            
+        doc_ids_str = ",".join([f"'{doc_id}'" for doc_id in doc_ids])
+        
+        if self.namespace == "chunks":
+            # チャンクの場合はfull_doc_idで削除
+            sql = f"DELETE FROM LIGHTRAG_DOC_CHUNKS WHERE workspace=$1 AND full_doc_id IN ({doc_ids_str})"
+        elif self.namespace in ["entities", "entities_name"]:
+            # エンティティの場合は直接IDで削除（通常は必要ないが安全のため）
+            sql = f"DELETE FROM LIGHTRAG_VDB_ENTITY WHERE workspace=$1 AND id IN ({doc_ids_str})"
+        elif self.namespace == "relationships":
+            # リレーションシップの場合も同様
+            sql = f"DELETE FROM LIGHTRAG_VDB_RELATION WHERE workspace=$1 AND id IN ({doc_ids_str})"
+        else:
+            logger.warning(f"delete_by_doc_ids not implemented for namespace: {self.namespace}")
+            return
+            
+        await self.db.execute(sql, {"workspace": self.db.workspace})
+        logger.info(f"Deleted {self.namespace} vector records for doc_ids: {doc_ids}")
+
     async def index_done_callback(self):
         logger.info("vector data had been saved into postgresql db!")
 
@@ -450,20 +491,20 @@ class PGVectorStorage(BaseVectorStorage):
         
         # WHERE句を動的に構築
         where_clauses = ["workspace=$1", "distance>$2"]
-        # デバッグ用：distance閾値を一時的に緩く設定
-        debug_threshold = -1.0  # すべてのベクトルを許可
-        params = [self.db.workspace, debug_threshold]
-        print(f"Using debug distance threshold: {debug_threshold} (original: {self.cosine_better_than_threshold})")
+        params = [self.db.workspace, self.cosine_better_than_threshold]
         
         param_idx = 3 # パラメータインデックスは$3から開始
 
         if metadata_filter:
             for key, value in metadata_filter.items():
-                # すべての値を文字列として比較（JSONBでは一般的）
-                where_clauses.append(f"metadata IS NOT NULL AND metadata->>'{key}' = ${param_idx}")
-                params.append(str(value))
+                # 数値と文字列で適切なキャストを行う
+                if isinstance(value, (int, float)):
+                    where_clauses.append(f"metadata IS NOT NULL AND (metadata->>'{key}')::numeric = ${param_idx}")
+                    params.append(value)
+                else:
+                    where_clauses.append(f"metadata IS NOT NULL AND metadata->>'{key}' = ${param_idx}")
+                    params.append(str(value))
                 param_idx += 1
-                print(f"Added metadata filter: {key} = {str(value)}")
         
         if start_time:
             # 文字列なら datetime にパース
@@ -506,49 +547,19 @@ class PGVectorStorage(BaseVectorStorage):
 
         # デバッグ情報を追加
         if metadata_filter:
-            print(f"Metadata filter applied: {metadata_filter}")
-            print(f"Generated SQL: {sql}")
-            print(f"Parameters: {params}")
-        else:
-            print(f"No metadata filter applied. Generated SQL: {sql}")
-            print(f"Parameters: {params}")
+            logger.debug(f"Metadata filter applied: {metadata_filter}")
+            logger.debug(f"Generated SQL: {sql}")
+            logger.debug(f"Parameters: {params}")
 
         # クエリ実行
         try:
             results = await self.db.query(sql, params, multirows=True)
-            print(f"Query returned {len(results) if results else 0} results")
-            if results and len(results) > 0:
-                print(f"First result sample: {results[0]}")
-            
-            # デバッグ用：メタデータフィルタが0件の場合、データベースの内容を確認
-            if metadata_filter and len(results) == 0:
-                debug_sql = """SELECT id, content, metadata, 
-                              1 - (content_vector <=> '[{embedding_string}]'::vector) as distance
-                              FROM LIGHTRAG_DOC_CHUNKS 
-                              WHERE workspace=$1 
-                              LIMIT 5""".format(embedding_string=embedding_string)
-                debug_results = await self.db.query(debug_sql, [self.db.workspace], multirows=True)
-                print(f"Debug: Found {len(debug_results) if debug_results else 0} total chunks in database")
-                if debug_results:
-                    for i, row in enumerate(debug_results[:3]):
-                        print(f"Debug chunk {i}: id={row.get('id')}, metadata={row.get('metadata')}, distance={row.get('distance')}")
-                
-                # メタデータフィルタのみでテスト（distance条件なし）
-                metadata_only_sql = """SELECT id, content, metadata
-                                      FROM LIGHTRAG_DOC_CHUNKS 
-                                      WHERE workspace=$1 AND metadata IS NOT NULL AND metadata->>'category' = $2
-                                      LIMIT 5"""
-                metadata_results = await self.db.query(metadata_only_sql, [self.db.workspace, list(metadata_filter.values())[0]], multirows=True)
-                print(f"Debug: Found {len(metadata_results) if metadata_results else 0} chunks matching metadata filter only")
-                if metadata_results:
-                    for i, row in enumerate(metadata_results[:2]):
-                        print(f"Debug metadata match {i}: id={row.get('id')}, metadata={row.get('metadata')}")
-            
+            logger.debug(f"Query returned {len(results) if results else 0} results")
             return results
         except Exception as e:
-            print(f"Error executing vector query with metadata filter: {e}")
-            print(f"SQL: {sql}")
-            print(f"Parameters: {params}")
+            logger.error(f"Error executing vector query with metadata filter: {e}")
+            logger.error(f"SQL: {sql}")
+            logger.error(f"Parameters: {params}")
             raise
 
 
@@ -1412,7 +1423,7 @@ SQL_TEMPLATES = {
                       SET entity_name=EXCLUDED.entity_name,
                       content=EXCLUDED.content,
                       content_vector=EXCLUDED.content_vector,
-                      update_time=CURRENT_TIMESTAMP
+                      updated_at=CURRENT_TIMESTAMP
                      """,
     "upsert_relationship": """INSERT INTO LIGHTRAG_VDB_RELATION (workspace, id, source_id,
                       target_id, content, content_vector)
@@ -1421,7 +1432,8 @@ SQL_TEMPLATES = {
                       SET source_id=EXCLUDED.source_id,
                       target_id=EXCLUDED.target_id,
                       content=EXCLUDED.content,
-                      content_vector=EXCLUDED.content_vector, update_time = CURRENT_TIMESTAMP
+                      content_vector=EXCLUDED.content_vector,
+                      updated_at = CURRENT_TIMESTAMP
                      """,
     # SQL for VectorStorage
     "entities": """SELECT entity_name, distance, id, content FROM
