@@ -474,6 +474,10 @@ class MiniRAG:
             logger.info("No new unique documents were found.")
             return
 
+        # デバッグ用：ドキュメントのメタデータをログ出力
+        for doc_id, doc_data in new_docs.items():
+            print(f"Debug: Inserting doc {doc_id} with metadata: {doc_data.get('metadata', {})}")
+        
         await self.doc_status.upsert(new_docs)
         logger.info(f"Stored {len(new_docs)} new unique documents")
 
