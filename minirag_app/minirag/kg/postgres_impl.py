@@ -31,6 +31,7 @@ from ..base import (
     DocProcessingStatus,
     BaseGraphStorage,
 )
+from datetime import datetime
 
 if sys.platform.startswith("win"):
     import asyncio.windows_events
@@ -81,7 +82,23 @@ class PostgreSQLDB:
     async def check_tables(self):
         for k, v in TABLES.items():
             try:
+                # テーブルが存在するかチェック
                 await self.query("SELECT 1 FROM {k} LIMIT 1".format(k=k))
+
+                # 既存テーブルに metadata 列が無い場合は追加
+                if "metadata" in v["ddl"]:
+                    await self.execute(f"ALTER TABLE {k} ADD COLUMN IF NOT EXISTS metadata JSONB;")
+
+                # 既存テーブルに updated_at 列が無い場合は追加
+                if "updated_at" in v["ddl"]:
+                    await self.execute(f"ALTER TABLE {k} ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP;")
+
+                # 既存テーブルに created_at 列が無い場合は追加
+                if "created_at" in v["ddl"]:
+                    await self.execute(
+                        f"ALTER TABLE {k} ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;"
+                    )
+
             except Exception as e:
                 logger.error(f"Failed to check table {k} in PostgreSQL database")
                 logger.error(f"PostgreSQL database error: {e}")
@@ -97,7 +114,7 @@ class PostgreSQLDB:
     async def query(
         self,
         sql: str,
-        params: dict = None,
+        params: Union[dict, list] = None,
         multirows: bool = False,
         for_age: bool = False,
         graph_name: str = None,
@@ -107,7 +124,10 @@ class PostgreSQLDB:
                 if for_age:
                     await PostgreSQLDB._prerequisite(connection, graph_name)
                 if params:
-                    rows = await connection.fetch(sql, *params.values())
+                    if isinstance(params, dict):
+                        rows = await connection.fetch(sql, *params.values())
+                    else:
+                        rows = await connection.fetch(sql, *params)
                 else:
                     rows = await connection.fetch(sql)
 
@@ -424,11 +444,11 @@ class PGVectorStorage(BaseVectorStorage):
         embedding_string = ",".join(map(str, embedding))
 
         base_sql = SQL_TEMPLATES[self.namespace]
-
+        
         # WHERE句を動的に構築
         where_clauses = ["workspace=$1", "distance>$2"]
         params = [self.db.workspace, self.cosine_better_than_threshold]
-
+        
         param_idx = 3 # パラメータインデックスは$3から開始
 
         if metadata_filter:
@@ -436,13 +456,32 @@ class PGVectorStorage(BaseVectorStorage):
                 where_clauses.append(f"metadata->>'{key}' = ${param_idx}")
                 params.append(str(value))
                 param_idx += 1
-
+        
         if start_time:
+            # 文字列なら datetime にパース
+            if isinstance(start_time, str):
+                try:
+                    start_time = datetime.fromisoformat(start_time)
+                except ValueError:
+                    # ISO形式以外も許容: 空白区切りなど
+                    try:
+                        start_time = datetime.strptime(start_time, "%Y-%m-%d %H:%M:%S")
+                    except ValueError:
+                        # パース失敗時はそのまま渡す (asyncpg が型変換を試みる)
+                        pass
             where_clauses.append(f"created_at >= ${param_idx}")
             params.append(start_time)
             param_idx += 1
 
         if end_time:
+            if isinstance(end_time, str):
+                try:
+                    end_time = datetime.fromisoformat(end_time)
+                except ValueError:
+                    try:
+                        end_time = datetime.strptime(end_time, "%Y-%m-%d %H:%M:%S")
+                    except ValueError:
+                        pass
             where_clauses.append(f"created_at <= ${param_idx}")
             params.append(end_time)
             param_idx += 1
@@ -452,13 +491,13 @@ class PGVectorStorage(BaseVectorStorage):
             embedding_string=embedding_string,
             where_clause=" AND ".join(where_clauses)
         )
-
+        
         # LIMIT句を追加
         sql += f" ORDER BY distance DESC LIMIT ${param_idx}"
         params.append(top_k)
 
         # クエリ実行
-        results = await self.db.query(sql, params, multirows=True)
+        results = await self.db.query(sql, params=params, multirows=True)
         return results
 
 
@@ -1183,7 +1222,7 @@ NAMESPACE_TABLE_MAP = {
 
 TABLES = {
     "LIGHTRAG_DOC_FULL": {
-        "ddl": """CREATE TABLE LIGHTRAG_DOC_FULL (
+        "ddl": """CREATE TABLE IF NOT EXISTS LIGHTRAG_DOC_FULL (
                     id VARCHAR(255),
                     workspace VARCHAR(255),
                     doc_name VARCHAR(1024),
@@ -1195,7 +1234,7 @@ TABLES = {
                     )"""
     },
     "LIGHTRAG_DOC_CHUNKS": {
-        "ddl": """CREATE TABLE LIGHTRAG_DOC_CHUNKS (
+        "ddl": """CREATE TABLE IF NOT EXISTS LIGHTRAG_DOC_CHUNKS (
                     id VARCHAR(255),
                     workspace VARCHAR(255),
                     full_doc_id VARCHAR(256),
@@ -1210,7 +1249,7 @@ TABLES = {
                     )"""
     },
     "LIGHTRAG_VDB_ENTITY": {
-        "ddl": """CREATE TABLE LIGHTRAG_VDB_ENTITY (
+        "ddl": """CREATE TABLE IF NOT EXISTS LIGHTRAG_VDB_ENTITY (
                     id VARCHAR(255),
                     workspace VARCHAR(255),
                     entity_name VARCHAR(255),
@@ -1223,7 +1262,7 @@ TABLES = {
                     )"""
     },
     "LIGHTRAG_VDB_RELATION": {
-        "ddl": """CREATE TABLE LIGHTRAG_VDB_RELATION (
+        "ddl": """CREATE TABLE IF NOT EXISTS LIGHTRAG_VDB_RELATION (
                     id VARCHAR(255),
                     workspace VARCHAR(255),
                     source_id VARCHAR(256),
@@ -1237,7 +1276,7 @@ TABLES = {
                     )"""
     },
     "LIGHTRAG_LLM_CACHE": {
-        "ddl": """CREATE TABLE LIGHTRAG_LLM_CACHE (
+        "ddl": """CREATE TABLE IF NOT EXISTS LIGHTRAG_LLM_CACHE (
 	                workspace varchar(255) NOT NULL,
 	                id varchar(255) NOT NULL,
 	                mode varchar(32) NOT NULL,
@@ -1249,7 +1288,7 @@ TABLES = {
                     )"""
     },
     "LIGHTRAG_DOC_STATUS": {
-        "ddl": """CREATE TABLE LIGHTRAG_DOC_STATUS (
+        "ddl": """CREATE TABLE IF NOT EXISTS LIGHTRAG_DOC_STATUS (
 	               workspace varchar(255) NOT NULL,
 	               id varchar(255) NOT NULL,
 	               content_summary varchar(255) NULL,
@@ -1335,23 +1374,27 @@ SQL_TEMPLATES = {
                      """,
     # SQL for VectorStorage
     "entities": """SELECT entity_name, distance FROM
-        (SELECT id, entity_name, metadata, created_at, 1 - (content_vector <=> '[{embedding_string}]'::vector) as distance
-        FROM LIGHTRAG_VDB_ENTITY) as subquery
+        (SELECT workspace, id, entity_name, metadata, created_at,
+                1 - (content_vector <=> '[{embedding_string}]'::vector) as distance
+         FROM LIGHTRAG_VDB_ENTITY) AS subquery
         WHERE {where_clause}
        """,
     "entities_name": """SELECT entity_name, distance FROM
-        (SELECT id, entity_name, metadata, created_at, 1 - (content_vector <=> '[{embedding_string}]'::vector) as distance
-        FROM LIGHTRAG_VDB_ENTITY) as subquery
+        (SELECT workspace, id, entity_name, metadata, created_at,
+                1 - (content_vector <=> '[{embedding_string}]'::vector) as distance
+         FROM LIGHTRAG_VDB_ENTITY) AS subquery
         WHERE {where_clause}
        """,
-    "relationships": """SELECT source_id as src_id, target_id as tgt_id FROM
-        (SELECT id, source_id, target_id, metadata, created_at, 1 - (content_vector <=> '[{embedding_string}]'::vector) as distance
-        FROM LIGHTRAG_VDB_RELATION) as subquery
+    "relationships": """SELECT source_id AS src_id, target_id AS tgt_id FROM
+        (SELECT workspace, id, source_id, target_id, metadata, created_at,
+                1 - (content_vector <=> '[{embedding_string}]'::vector) as distance
+         FROM LIGHTRAG_VDB_RELATION) AS subquery
         WHERE {where_clause}
        """,
     "chunks": """SELECT id FROM
-        (SELECT id, metadata, created_at, 1 - (content_vector <=> '[{embedding_string}]'::vector) as distance
-        FROM LIGHTRAG_DOC_CHUNKS) as subquery
+        (SELECT workspace, id, metadata, created_at,
+                1 - (content_vector <=> '[{embedding_string}]'::vector) as distance
+         FROM LIGHTRAG_DOC_CHUNKS) AS subquery
         WHERE {where_clause}
        """,
 }

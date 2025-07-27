@@ -1070,8 +1070,25 @@ def combine_contexts(high_level_context, low_level_context):
     )
     # Combine and deduplicate the sources
     combined_sources = process_combine_contexts(hl_sources, ll_sources)
-    source = combined_sources.split("\n")[1:]  # Remove header
-    source = [s.split(",")[1] for s in source if s] # Extract content
+
+    # Robustly extract content column, ignoring malformed lines
+    source_lines = combined_sources.strip().split("\n")
+    # Skip header row if present
+    if source_lines and source_lines[0].lower().startswith("id"):
+        source_lines = source_lines[1:]
+
+    source = []
+    for line in source_lines:
+        line = line.strip()
+        if not line:
+            continue
+        # Split only on first comma to keep remaining commas in content
+        parts = line.split(",", 1)
+        if len(parts) == 2:
+            source.append(parts[1])
+        # If format unexpected, skip or take entire line as fallback
+        elif len(parts) == 1:
+            source.append(parts[0])
     combined_sources = chunking_by_token_size(combined_sources, max_token_size=2000)
     # Format the combined context
     response_context = f"""
