@@ -453,8 +453,13 @@ class PGVectorStorage(BaseVectorStorage):
 
         if metadata_filter:
             for key, value in metadata_filter.items():
-                where_clauses.append(f"metadata->>'{key}' = ${param_idx}")
-                params.append(str(value))
+                # 値が数値かどうかに応じてキャストを変更
+                if isinstance(value, (int, float)):
+                    where_clauses.append(f"(metadata->>'{key}')::numeric = ${param_idx}")
+                    params.append(value)
+                else:
+                    where_clauses.append(f"metadata->>'{key}' = ${param_idx}")
+                    params.append(str(value))
                 param_idx += 1
         
         if start_time:
