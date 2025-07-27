@@ -16,21 +16,11 @@ http://localhost:8165/tree?
 作成したデータベースは「MiniRAG/data/postgres」に保存される。
 
 
-◯ソースコードを変更したらこれでいい
+◯ソースコードを変更したらこれでいい（データベースをクリーンアップする）
 sudo scripts/start.sh cleanup
 
 
-# 開発時（推奨）- ソースコード変更が即座に反映
-./scripts/start.sh dev
 
-# 本番用ビルド（必要時のみ）
-./scripts/start.sh
-
-# DB初期化 + 開発モード
-sudo ./scripts/start.sh cleanup dev
-
-# ヘルプ表示
-./scripts/start.sh help
 
 
 

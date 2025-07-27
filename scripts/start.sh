@@ -3,28 +3,6 @@
 
 # 引数の確認
 CLEANUP_DB=false
-DEV_MODE=false
-
-# 引数を処理
-for arg in "$@"; do
-    case $arg in
-        cleanup)
-            CLEANUP_DB=true
-            echo "DBクリーンアップモードで起動します..."
-            ;;
-        dev)
-            DEV_MODE=true
-            echo "開発モードで起動します（ソースコードをマウント）..."
-            ;;
-        help)
-            echo "使用法: $0 [cleanup] [dev] [help]"
-            echo "  cleanup: データベースをクリーンアップしてから起動"
-            echo "  dev: 開発モード（ソースコードをボリュームマウント、高速起動）"
-            echo "  help: このヘルプを表示"
-            exit 0
-            ;;
-    esac
-done
 
 # DBクリーンアップの実行
 if [ "$CLEANUP_DB" = true ]; then
