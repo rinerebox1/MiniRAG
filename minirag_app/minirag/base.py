@@ -43,6 +43,9 @@ class QueryParam:
     history_turns: int = (
         3  # Number of complete conversation turns (user-assistant pairs) to consider
     )
+    metadata_filter: Optional[dict] = None
+    start_time: Optional[str] = None
+    end_time: Optional[str] = None
 
 
 @dataclass

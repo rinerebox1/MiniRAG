@@ -491,8 +491,11 @@ async def _build_local_query_context(
     query_param: QueryParam,
 ):
     results = await entities_vdb.query(
-        query, top_k=query_param.top_k, metadata_filter=query_param.metadata_filter,
-        start_time=query_param.start_time, end_time=query_param.end_time
+        query,
+        top_k=query_param.top_k,
+        metadata_filter=query_param.metadata_filter,
+        start_time=query_param.start_time,
+        end_time=query_param.end_time,
     )
 
     if not len(results):
@@ -766,8 +769,11 @@ async def _build_global_query_context(
     query_param: QueryParam,
 ):
     results = await relationships_vdb.query(
-        keywords, top_k=query_param.top_k, metadata_filter=query_param.metadata_filter,
-        start_time=query_param.start_time, end_time=query_param.end_time
+        keywords,
+        top_k=query_param.top_k,
+        metadata_filter=query_param.metadata_filter,
+        start_time=query_param.start_time,
+        end_time=query_param.end_time,
     )
 
     if not len(results):
@@ -1094,8 +1100,11 @@ async def naive_query(
 ):
     use_model_func = global_config["llm_model_func"]
     results = await chunks_vdb.query(
-        query, top_k=query_param.top_k, metadata_filter=query_param.metadata_filter,
-        start_time=query_param.start_time, end_time=query_param.end_time
+        query,
+        top_k=query_param.top_k,
+        metadata_filter=query_param.metadata_filter,
+        start_time=query_param.start_time,
+        end_time=query_param.end_time,
     )
     if not len(results):
         return PROMPTS["fail_response"], []
@@ -1285,8 +1294,11 @@ async def _build_mini_query_context(
     for ent in ent_from_query:
         ent_from_query_dict[ent] = []
         results_node = await entity_name_vdb.query(
-            ent, top_k=query_param.top_k, metadata_filter=query_param.metadata_filter,
-            start_time=query_param.start_time, end_time=query_param.end_time
+            ent,
+            top_k=query_param.top_k,
+            metadata_filter=query_param.metadata_filter,
+            start_time=query_param.start_time,
+            end_time=query_param.end_time,
         )
         # results_node の例（distance付き）
         # [{'entity_name': '"映画"', 'distance': 0.85}, {'entity_name': '"散歩"', 'distance': 0.72}, ...]
@@ -1343,7 +1355,8 @@ async def _build_mini_query_context(
         originalquery,
         top_k=len(ent_from_query) * query_param.top_k,
         metadata_filter=query_param.metadata_filter,
-        start_time=query_param.start_time, end_time=query_param.end_time
+        start_time=query_param.start_time,
+        end_time=query_param.end_time,
     )
     goodedge = []
     badedge = []
@@ -1400,7 +1413,8 @@ async def _build_mini_query_context(
         originalquery,
         top_k=int(query_param.top_k / 2),
         metadata_filter=query_param.metadata_filter,
-        start_time=query_param.start_time, end_time=query_param.end_time
+        start_time=query_param.start_time,
+        end_time=query_param.end_time,
     )
     chunks_ids = [r["id"] for r in results]
     final_chunk_id = kwd2chunk(
