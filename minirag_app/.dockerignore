@@ -1,0 +1,53 @@
+# ドキュメントとテスト関連
+README.md
+docs/
+tests/
+reproduce/
+dataset/
+assets/
+graph-visuals/
+
+# Git関連
+.git
+.gitignore
+
+# Python関連
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+.coverage
+.pytest_cache/
+*.egg-info/
+build/
+dist/
+
+# Jupyter関連
+.ipynb_checkpoints/
+*.ipynb
+
+# 環境設定
+.env
+.env.local
+.venv/
+venv/
+
+# エディタ関連
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS関連
+.DS_Store
+Thumbs.db
+
+# ログファイル
+*.log
+
+# 一時ファイル
+*.tmp
+*.temp 

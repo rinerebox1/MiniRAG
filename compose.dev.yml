@@ -1,0 +1,17 @@
+services:
+  minirag_on_postgre:
+    # 開発時はソースコードをボリュームマウント
+    volumes:
+      - ./minirag_app/minirag:/app/minirag:ro
+      - ./minirag_app/main.py:/app/main.py:ro
+    # 開発時はイメージを再ビルドしない
+    build:
+      context: ./minirag_app
+      dockerfile: Dockerfile.minirag_on_postgre
+      target: dependencies  # 依存関係のステージまでしかビルドしない
+    # 開発時用のコマンド（ソースコード変更時に自動でローカルパッケージを再インストール）
+    command: >
+      bash -c "
+      pip install --user --no-deps -e . &&
+      jupyter notebook --ip=0.0.0.0 --port=8165 --no-browser --allow-root --NotebookApp.token= --NotebookApp.password=
+      " 

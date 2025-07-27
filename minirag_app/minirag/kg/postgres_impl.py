@@ -7,6 +7,34 @@ from dataclasses import dataclass
 from typing import Union, List, Dict, Set, Any, Tuple
 import numpy as np
 
+# ---------------------------------------------------------------------------
+# Utility helpers
+# ---------------------------------------------------------------------------
+
+
+def _ensure_jsonb(obj: Any) -> str:
+    """Return a JSON **string** suitable for a `jsonb` column without double-encoding.
+
+    Rules:
+    1. If *obj* is ``None`` → return an empty JSON object string ``"{}"``.
+    2. If *obj* is already ``str`` **and** can be parsed by ``json.loads`` → assume it
+       has been JSON-serialised once and return it unchanged.
+    3. Otherwise, serialise with ``json.dumps``.
+
+    This prevents accidental double encoding like
+    ``"\"{\"key\": \"value\"}\""`` which breaks JSONB queries.
+    """
+    if obj is None:
+        return "{}"
+    if isinstance(obj, str):
+        try:
+            json.loads(obj)
+            return obj  # already JSON serialised
+        except json.JSONDecodeError:
+            # plain string – wrap it so it becomes valid JSON
+            return json.dumps(obj)
+    return json.dumps(obj)
+
 import pipmaster as pm
 
 if not pm.is_installed("asyncpg"):
@@ -302,7 +330,7 @@ class PGKVStorage(BaseKVStorage):
                     "id": k,
                     "content": v["content"],
                     "workspace": self.db.workspace,
-                    "metadata": json.dumps(v.get("metadata", {})),
+                    "metadata": _ensure_jsonb(v.get("metadata", {})),  # JSON文字列として渡す
                 }
                 await self.db.execute(upsert_sql, _data)
         elif self.namespace == "llm_response_cache":
@@ -335,6 +363,7 @@ class PGKVStorage(BaseKVStorage):
             return
             
         await self.db.execute(sql, {"workspace": self.db.workspace})
+        print(f"🗑️  Deleted {self.namespace} records for doc_ids: {doc_ids}")
         logger.info(f"Deleted {self.namespace} records for doc_ids: {doc_ids}")
 
     async def index_done_callback(self):
@@ -358,6 +387,8 @@ class PGVectorStorage(BaseVectorStorage):
     def _upsert_chunks(self, item: dict):
         try:
             upsert_sql = SQL_TEMPLATES["upsert_chunk"]
+            # メタデータをJSON文字列として渡すが、データベース側でJSONBとして扱う
+            metadata = item.get("metadata", {})
             data = {
                 "workspace": self.db.workspace,
                 "id": item["__id__"],
@@ -366,9 +397,9 @@ class PGVectorStorage(BaseVectorStorage):
                 "full_doc_id": item["full_doc_id"],
                 "content": item["content"],
                 "content_vector": json.dumps(item["__vector__"].tolist()),
-                "metadata": json.dumps(item.get("metadata", {})),
+                "metadata": _ensure_jsonb(metadata),  # JSON文字列として渡す
             }
-            logger.debug(f"Upserting chunk with metadata: {item.get('metadata', {})}")
+            print(f"💾 Upserting chunk '{item['__id__'][:16]}...' with metadata: {item.get('metadata', {})}")
         except Exception as e:
             logger.error(f"Error to prepare upsert sql: {e}")
             print(item)
@@ -468,6 +499,7 @@ class PGVectorStorage(BaseVectorStorage):
             return
             
         await self.db.execute(sql, {"workspace": self.db.workspace})
+        print(f"🗑️  Deleted {self.namespace} vector records for doc_ids: {doc_ids}")
         logger.info(f"Deleted {self.namespace} vector records for doc_ids: {doc_ids}")
 
     async def index_done_callback(self):
@@ -491,20 +523,32 @@ class PGVectorStorage(BaseVectorStorage):
         
         # WHERE句を動的に構築
         where_clauses = ["workspace=$1", "distance>$2"]
-        params = [self.db.workspace, self.cosine_better_than_threshold]
+        # デバッグ用：一時的にdistance閾値を緩くする
+        temp_threshold = -1.0  # 全てのベクトルを許可
+        params = [self.db.workspace, temp_threshold]
+        print(f"🎯 Using temporary distance threshold: {temp_threshold} (original: {self.cosine_better_than_threshold})")
         
         param_idx = 3 # パラメータインデックスは$3から開始
 
         if metadata_filter:
             for key, value in metadata_filter.items():
-                # 数値と文字列で適切なキャストを行う
+                # メタデータの型に応じて適切なアクセス方法を選択
+                # JSONB object型の場合は直接アクセス、string型の場合は変換が必要
                 if isinstance(value, (int, float)):
-                    where_clauses.append(f"metadata IS NOT NULL AND (metadata->>'{key}')::numeric = ${param_idx}")
+                    # 両方のケースに対応（object型とstring型）
+                    where_clauses.append(f"""metadata IS NOT NULL AND (
+                        (jsonb_typeof(metadata) = 'object' AND (metadata->>'{key}')::numeric = ${param_idx}) OR
+                        (jsonb_typeof(metadata) = 'string' AND ((metadata::text)::jsonb->>'{key}')::numeric = ${param_idx})
+                    )""")
                     params.append(value)
                 else:
-                    where_clauses.append(f"metadata IS NOT NULL AND metadata->>'{key}' = ${param_idx}")
+                    where_clauses.append(f"""metadata IS NOT NULL AND (
+                        (jsonb_typeof(metadata) = 'object' AND metadata->>'{key}' = ${param_idx}) OR
+                        (jsonb_typeof(metadata) = 'string' AND (metadata::text)::jsonb->>'{key}' = ${param_idx})
+                    )""")
                     params.append(str(value))
                 param_idx += 1
+                print(f"🔧 Flexible metadata filter: {key} = {str(value)} (handles both object and string types)")
         
         if start_time:
             # 文字列なら datetime にパース
@@ -547,14 +591,82 @@ class PGVectorStorage(BaseVectorStorage):
 
         # デバッグ情報を追加
         if metadata_filter:
-            logger.debug(f"Metadata filter applied: {metadata_filter}")
-            logger.debug(f"Generated SQL: {sql}")
-            logger.debug(f"Parameters: {params}")
+            print(f"🔍 Metadata filter applied: {metadata_filter}")
+            print(f"🔍 Generated SQL: {sql}")
+            print(f"🔍 Parameters: {params}")
+        else:
+            print(f"🔍 No metadata filter applied")
 
         # クエリ実行
         try:
             results = await self.db.query(sql, params, multirows=True)
-            logger.debug(f"Query returned {len(results) if results else 0} results")
+            print(f"📊 Query returned {len(results) if results else 0} results")
+            
+            # 結果を表示（最初の2件）
+            if results:
+                for i, result in enumerate(results[:2]):
+                    print(f"✅ Result {i+1}: id={result.get('id', '')[:16]}..., distance={result.get('distance', 'N/A')}")
+            
+            # データベースの状況を確認
+            debug_sql = f"SELECT COUNT(*) as total FROM LIGHTRAG_DOC_CHUNKS WHERE workspace=$1"
+            count_result = await self.db.query(debug_sql, [self.db.workspace])
+            total_chunks = count_result['total'] if count_result else 0
+            print(f"🔎 Total chunks in database: {total_chunks}")
+            
+            if metadata_filter:
+                # メタデータ有りのチャンク数をチェック
+                meta_sql = f"SELECT COUNT(*) as with_meta FROM LIGHTRAG_DOC_CHUNKS WHERE workspace=$1 AND metadata IS NOT NULL AND metadata != '{{}}'::jsonb"
+                meta_result = await self.db.query(meta_sql, [self.db.workspace])
+                with_meta = meta_result['with_meta'] if meta_result else 0
+                print(f"🔎 Chunks with metadata: {with_meta}")
+                
+                # 実際のdistance値とメタデータの生の値を確認
+                distance_sql = """SELECT id, metadata, 
+                                 CASE 
+                                     WHEN jsonb_typeof(metadata) = 'object' THEN metadata->>'category'
+                                     WHEN jsonb_typeof(metadata) = 'string' THEN (metadata::text)::jsonb->>'category'
+                                     ELSE NULL
+                                 END as category,
+                                 1 - (content_vector <=> '[{embedding_string}]'::vector) as distance
+                                 FROM LIGHTRAG_DOC_CHUNKS 
+                                 WHERE workspace=$1 AND metadata IS NOT NULL 
+                                 ORDER BY distance DESC LIMIT 3""".format(embedding_string=embedding_string)
+                distance_results = await self.db.query(distance_sql, [self.db.workspace], multirows=True)
+                print(f"🔎 Raw metadata and distance values:")
+                for dr in distance_results:
+                    print(f"   - ID: {dr.get('id', '')[:16]}...")
+                    print(f"     Raw metadata: {dr.get('metadata')}")
+                    print(f"     Extracted category: {dr.get('category')}")
+                    print(f"     Distance: {dr.get('distance')}")
+                    print(f"     Metadata type: {type(dr.get('metadata'))}")
+                    
+                # より安全なJSONBテスト
+                test_sql = """SELECT id, 
+                             metadata,
+                             metadata::text as metadata_text,
+                             jsonb_typeof(metadata) as metadata_type
+                             FROM LIGHTRAG_DOC_CHUNKS 
+                             WHERE workspace=$1 AND metadata IS NOT NULL 
+                             LIMIT 1"""
+                test_result = await self.db.query(test_sql, [self.db.workspace])
+                if test_result:
+                    print(f"🔍 JSONB structure analysis:")
+                    print(f"     metadata: {test_result.get('metadata')}")
+                    print(f"     metadata_text: {test_result.get('metadata_text')}")
+                    print(f"     metadata_type: {test_result.get('metadata_type')}")
+                    
+                    # metadata_typeがobjectの場合のみキーを取得
+                    if test_result.get('metadata_type') == 'object':
+                        keys_sql = """SELECT jsonb_object_keys(metadata) as key 
+                                     FROM LIGHTRAG_DOC_CHUNKS 
+                                     WHERE workspace=$1 AND metadata IS NOT NULL 
+                                     LIMIT 1"""
+                        keys_result = await self.db.query(keys_sql, [self.db.workspace], multirows=True)
+                        keys = [row['key'] for row in keys_result] if keys_result else []
+                        print(f"     keys: {keys}")
+                    else:
+                        print(f"     keys: N/A (metadata is not an object)")
+            
             return results
         except Exception as e:
             logger.error(f"Error executing vector query with metadata filter: {e}")
@@ -648,7 +760,7 @@ class PGDocStatusStorage(DocStatusStorage):
             data: Dictionary of document IDs and their status data
         """
         sql = """insert into LIGHTRAG_DOC_STATUS(workspace,id,content_summary,content_length,chunks_count,status, metadata)
-                 values($1,$2,$3,$4,$5,$6, $7)
+                 values($1,$2,$3,$4,$5,$6, $7::jsonb)
                   on conflict(id,workspace) do update set
                   content_summary = EXCLUDED.content_summary,
                   content_length = EXCLUDED.content_length,
@@ -667,7 +779,7 @@ class PGDocStatusStorage(DocStatusStorage):
                     "content_length": v["content_length"],
                     "chunks_count": v["chunks_count"] if "chunks_count" in v else -1,
                     "status": v["status"],
-                    "metadata": json.dumps(v.get("metadata", {})),
+                    "metadata": _ensure_jsonb(v.get("metadata", {})),  # JSON文字列として渡す
                 },
             )
         return data
@@ -1393,7 +1505,7 @@ SQL_TEMPLATES = {
                                 """,
     "filter_keys": "SELECT id FROM {table_name} WHERE workspace=$1 AND id IN ({ids})",
     "upsert_doc_full": """INSERT INTO LIGHTRAG_DOC_FULL (id, content, workspace, metadata)
-                        VALUES ($1, $2, $3, $4)
+                        VALUES ($1, $2, $3, $4::jsonb)
                         ON CONFLICT (workspace,id) DO UPDATE
                            SET content = EXCLUDED.content, metadata = EXCLUDED.metadata, updated_at = CURRENT_TIMESTAMP
                        """,
@@ -1407,7 +1519,7 @@ SQL_TEMPLATES = {
                                      """,
     "upsert_chunk": """INSERT INTO LIGHTRAG_DOC_CHUNKS (workspace, id, tokens,
                       chunk_order_index, full_doc_id, content, content_vector, metadata)
-                      VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                      VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb)
                       ON CONFLICT (workspace,id) DO UPDATE
                       SET tokens=EXCLUDED.tokens,
                       chunk_order_index=EXCLUDED.chunk_order_index,

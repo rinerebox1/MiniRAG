@@ -1,9 +1,10 @@
 # syntax=docker/dockerfile:1
 
-########## Build stage ##########
-FROM python:3.11-slim AS builder
+########## Dependencies stage ##########
+FROM python:3.11-slim AS dependencies
 WORKDIR /app
 
+# システム依存関係のインストール（最も変更されないレイヤー）
 RUN apt-get update && apt-get install -y --no-install-recommends \
       build-essential curl pkg-config libssl-dev \
     && curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y \
@@ -12,18 +13,25 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 ENV PATH="/root/.cargo/bin:${PATH}"
 
-# Copy requirements first (依存関係のインストールを先に実行してキャッシュを活用)
+# requirements.txtのみをコピー（依存関係のキャッシュを最大化）
 COPY requirements.txt .
 
-# 依存関係をインストール（ソースコード変更時も再実行されない）
-# タイムアウト設定とリトライ機能を追加、分割インストールで安定性向上
+# 外部依存関係をインストール（ソースコード変更時も再実行されない）
 RUN pip install --user --no-cache-dir --timeout=600 --retries=5 -r requirements.txt
+
 RUN pip install --user --no-cache-dir --timeout=600 --retries=5 jupyter notebook
+
 RUN pip install --user --no-cache-dir --timeout=600 --retries=5 transformers torch sentence-transformers
+
 RUN pip install --user --no-cache-dir --timeout=600 --retries=5 openai nano-vectordb asyncpg psycopg "psycopg[binary,pool]"
 
-# setup.pyとソースコードをコピー（この後のレイヤーはソースコード変更時に再実行される）
+########## Build stage ##########
+FROM dependencies AS builder
+
+# setup.pyをコピー（setup.pyが変更された場合のみ影響）
 COPY setup.py .
+
+# ソースコードをコピー（最後にコピーしてキャッシュ効率を最大化）
 COPY minirag ./minirag
 
 ##### SEDによる修正 #####
@@ -31,14 +39,17 @@ COPY minirag ./minirag
 # →他にも色々な修正が必要だったため、コードを修正して上書きした(minirag_app/minirag/kg/postgres_impl.py)。sed コマンドは残しておく
 # RUN sed -i 's/where workspace=$1 and status=$1/where workspace=$1 and status=$2/' minirag/kg/postgres_impl.py
 
-# 最後にローカルパッケージをインストール（ソースコード変更時のみ再実行）
+# ローカルパッケージをインストール（ソースコード変更時のみ再実行）
 RUN pip install --user --no-cache-dir .
 
 ########## Runtime stage ##########
 FROM python:3.11-slim
 WORKDIR /app
 
+# 依存関係をコピー
 COPY --from=builder /root/.local /root/.local
+
+# アプリケーションコードをコピー
 COPY --from=builder /app/minirag ./minirag
 COPY --from=builder /app/setup.py .
 

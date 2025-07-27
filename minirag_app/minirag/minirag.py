@@ -351,6 +351,11 @@ class MiniRAG:
         metadatas: list[dict] | None = None,
         overwrite: bool = False,
     ) -> None:
+        print(f"🚀 AINSERT called with overwrite={overwrite}")
+        print(f"📥 Input: {len(input) if isinstance(input, list) else 1} documents")
+        print(f"📥 IDs: {ids}")
+        print(f"📥 Metadatas: {metadatas}")
+        
         if isinstance(input, str):
             input = [input]
         if isinstance(ids, str):
@@ -484,7 +489,12 @@ class MiniRAG:
 
         if overwrite and new_docs:
             # 上書きモードの場合、既存のチャンクを削除
+            print(f"🔥 OVERWRITE MODE: Deleting existing chunks for {len(new_docs)} documents")
             await self._delete_existing_chunks(list(new_docs.keys()))
+        
+        # デバッグ：保存するドキュメントのメタデータを確認
+        for doc_id, doc_data in new_docs.items():
+            print(f"📝 Storing doc '{doc_id}' with metadata: {doc_data.get('metadata', {})}")
         
         await self.doc_status.upsert(new_docs)
         logger.info(f"Stored {len(new_docs)} documents (overwrite={overwrite})")
@@ -537,7 +547,7 @@ class MiniRAG:
 
         for batch_idx, docs_batch in enumerate(docs_batches):
             for doc_id, status_doc in docs_batch:
-                logger.debug(f"Processing doc {doc_id}, metadata = {status_doc.metadata}")
+                print(f"⚙️  Processing doc '{doc_id}', status_doc.metadata = {status_doc.metadata}")
                 chunks = {
                     compute_mdhash_id(dp["content"], prefix="chunk-"): {
                         **dp,
@@ -551,7 +561,11 @@ class MiniRAG:
                         self.tiktoken_model_name,
                     )
                 }
-                logger.debug(f"Created {len(chunks)} chunks for doc {doc_id}")
+                print(f"📦 Created {len(chunks)} chunks for doc '{doc_id}'")
+                
+                # 各チャンクのメタデータを確認
+                for chunk_id, chunk_data in list(chunks.items())[:2]:  # 最初の2つだけ表示
+                    print(f"   └─ Chunk '{chunk_id[:16]}...' metadata: {chunk_data.get('metadata', {})}")
                 await asyncio.gather(
                     self.chunks_vdb.upsert(chunks),
                     self.full_docs.upsert(
