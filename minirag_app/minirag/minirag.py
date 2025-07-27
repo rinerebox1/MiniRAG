@@ -461,13 +461,15 @@ class MiniRAG:
         }
 
         all_new_doc_ids = set(new_docs.keys())
-        unique_new_doc_ids = await self.doc_status.filter_keys(all_new_doc_ids)
+        # デバッグ用：filter_keysをバイパスして強制更新
+        print(f"Debug: Bypassing filter_keys for debugging metadata issues")
+        unique_new_doc_ids = all_new_doc_ids  # await self.doc_status.filter_keys(all_new_doc_ids)
 
-        new_docs = {
-            doc_id: new_docs[doc_id]
-            for doc_id in unique_new_doc_ids
-            if doc_id in new_docs
-        }
+        # new_docs = {
+        #     doc_id: new_docs[doc_id]
+        #     for doc_id in unique_new_doc_ids
+        #     if doc_id in new_docs
+        # }
         if not new_docs:
             logger.info("No new unique documents were found.")
             return

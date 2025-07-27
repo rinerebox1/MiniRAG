@@ -126,6 +126,8 @@ class PostgreSQLDB:
                 if params:
                     if isinstance(params, dict):
                         rows = await connection.fetch(sql, *params.values())
+                    elif isinstance(params, list):
+                        rows = await connection.fetch(sql, *params)
                     else:
                         rows = await connection.fetch(sql, *params)
                 else:
@@ -348,6 +350,7 @@ class PGVectorStorage(BaseVectorStorage):
                 "content_vector": json.dumps(item["__vector__"].tolist()),
                 "metadata": json.dumps(item.get("metadata", {})),
             }
+            print(f"Upserting chunk with metadata: {item.get('metadata', {})}")
         except Exception as e:
             logger.error(f"Error to prepare upsert sql: {e}")
             print(item)
@@ -447,20 +450,20 @@ class PGVectorStorage(BaseVectorStorage):
         
         # WHERE句を動的に構築
         where_clauses = ["workspace=$1", "distance>$2"]
-        params = [self.db.workspace, self.cosine_better_than_threshold]
+        # デバッグ用：distance閾値を一時的に緩く設定
+        debug_threshold = -1.0  # すべてのベクトルを許可
+        params = [self.db.workspace, debug_threshold]
+        print(f"Using debug distance threshold: {debug_threshold} (original: {self.cosine_better_than_threshold})")
         
         param_idx = 3 # パラメータインデックスは$3から開始
 
         if metadata_filter:
             for key, value in metadata_filter.items():
-                # 値が数値かどうかに応じてキャストを変更
-                if isinstance(value, (int, float)):
-                    where_clauses.append(f"(metadata->>'{key}')::numeric = ${param_idx}")
-                    params.append(value)
-                else:
-                    where_clauses.append(f"metadata->>'{key}' = ${param_idx}")
-                    params.append(str(value))
+                # すべての値を文字列として比較（JSONBでは一般的）
+                where_clauses.append(f"metadata IS NOT NULL AND metadata->>'{key}' = ${param_idx}")
+                params.append(str(value))
                 param_idx += 1
+                print(f"Added metadata filter: {key} = {str(value)}")
         
         if start_time:
             # 文字列なら datetime にパース
@@ -501,9 +504,52 @@ class PGVectorStorage(BaseVectorStorage):
         sql += f" ORDER BY distance DESC LIMIT ${param_idx}"
         params.append(top_k)
 
+        # デバッグ情報を追加
+        if metadata_filter:
+            print(f"Metadata filter applied: {metadata_filter}")
+            print(f"Generated SQL: {sql}")
+            print(f"Parameters: {params}")
+        else:
+            print(f"No metadata filter applied. Generated SQL: {sql}")
+            print(f"Parameters: {params}")
+
         # クエリ実行
-        results = await self.db.query(sql, params=params, multirows=True)
-        return results
+        try:
+            results = await self.db.query(sql, params, multirows=True)
+            print(f"Query returned {len(results) if results else 0} results")
+            if results and len(results) > 0:
+                print(f"First result sample: {results[0]}")
+            
+            # デバッグ用：メタデータフィルタが0件の場合、データベースの内容を確認
+            if metadata_filter and len(results) == 0:
+                debug_sql = """SELECT id, content, metadata, 
+                              1 - (content_vector <=> '[{embedding_string}]'::vector) as distance
+                              FROM LIGHTRAG_DOC_CHUNKS 
+                              WHERE workspace=$1 
+                              LIMIT 5""".format(embedding_string=embedding_string)
+                debug_results = await self.db.query(debug_sql, [self.db.workspace], multirows=True)
+                print(f"Debug: Found {len(debug_results) if debug_results else 0} total chunks in database")
+                if debug_results:
+                    for i, row in enumerate(debug_results[:3]):
+                        print(f"Debug chunk {i}: id={row.get('id')}, metadata={row.get('metadata')}, distance={row.get('distance')}")
+                
+                # メタデータフィルタのみでテスト（distance条件なし）
+                metadata_only_sql = """SELECT id, content, metadata
+                                      FROM LIGHTRAG_DOC_CHUNKS 
+                                      WHERE workspace=$1 AND metadata IS NOT NULL AND metadata->>'category' = $2
+                                      LIMIT 5"""
+                metadata_results = await self.db.query(metadata_only_sql, [self.db.workspace, list(metadata_filter.values())[0]], multirows=True)
+                print(f"Debug: Found {len(metadata_results) if metadata_results else 0} chunks matching metadata filter only")
+                if metadata_results:
+                    for i, row in enumerate(metadata_results[:2]):
+                        print(f"Debug metadata match {i}: id={row.get('id')}, metadata={row.get('metadata')}")
+            
+            return results
+        except Exception as e:
+            print(f"Error executing vector query with metadata filter: {e}")
+            print(f"SQL: {sql}")
+            print(f"Parameters: {params}")
+            raise
 
 
 @dataclass
@@ -1378,26 +1424,26 @@ SQL_TEMPLATES = {
                       content_vector=EXCLUDED.content_vector, update_time = CURRENT_TIMESTAMP
                      """,
     # SQL for VectorStorage
-    "entities": """SELECT entity_name, distance FROM
-        (SELECT workspace, id, entity_name, metadata, created_at,
+    "entities": """SELECT entity_name, distance, id, content FROM
+        (SELECT workspace, id, entity_name, content, metadata, created_at,
                 1 - (content_vector <=> '[{embedding_string}]'::vector) as distance
          FROM LIGHTRAG_VDB_ENTITY) AS subquery
         WHERE {where_clause}
        """,
-    "entities_name": """SELECT entity_name, distance FROM
-        (SELECT workspace, id, entity_name, metadata, created_at,
+    "entities_name": """SELECT entity_name, distance, id, content FROM
+        (SELECT workspace, id, entity_name, content, metadata, created_at,
                 1 - (content_vector <=> '[{embedding_string}]'::vector) as distance
          FROM LIGHTRAG_VDB_ENTITY) AS subquery
         WHERE {where_clause}
        """,
-    "relationships": """SELECT source_id AS src_id, target_id AS tgt_id FROM
-        (SELECT workspace, id, source_id, target_id, metadata, created_at,
+    "relationships": """SELECT source_id AS src_id, target_id AS tgt_id, content, distance FROM
+        (SELECT workspace, id, source_id, target_id, content, metadata, created_at,
                 1 - (content_vector <=> '[{embedding_string}]'::vector) as distance
          FROM LIGHTRAG_VDB_RELATION) AS subquery
         WHERE {where_clause}
        """,
-    "chunks": """SELECT id FROM
-        (SELECT workspace, id, metadata, created_at,
+    "chunks": """SELECT id, content, distance FROM
+        (SELECT workspace, id, content, metadata, created_at,
                 1 - (content_vector <=> '[{embedding_string}]'::vector) as distance
          FROM LIGHTRAG_DOC_CHUNKS) AS subquery
         WHERE {where_clause}
