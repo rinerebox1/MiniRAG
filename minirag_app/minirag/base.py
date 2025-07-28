@@ -67,7 +67,7 @@ class BaseVectorStorage(StorageNameSpace):
     embedding_func: EmbeddingFunc
     meta_fields: set = field(default_factory=set)
 
-    async def query(self, query: str, top_k: int) -> list[dict]:
+    async def query(self, query: str, top_k: int, debug: bool = False) -> list[dict]:
         raise NotImplementedError
 
     async def upsert(self, data: dict[str, dict]):

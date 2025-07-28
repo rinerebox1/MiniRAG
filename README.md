@@ -1,3 +1,12 @@
+Julesにリファクタリングしてもらったブランチ。
+正常に動いているように見えるけど、
+debug=Flaseで
+🔎 Raw metadata and distance values:
+が出るようになったので、ここだけおかしいかも。
+
+
+
+
 # 使い方
 
 chmod +x scripts/build.sh
