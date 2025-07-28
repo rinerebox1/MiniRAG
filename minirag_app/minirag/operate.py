@@ -1179,8 +1179,8 @@ async def hybrid_query(
         high_level_context, hl_source = None, []
 
     context, _ = combine_contexts(high_level_context, low_level_context)
-    # 直接sourceを結合
-    source = ll_source + hl_source
+    # 重複を防ぐため、setを使用してユニークな要素のみを結合
+    source = list(set(ll_source + hl_source))
 
     if query_param.only_need_context:
         return context, source
