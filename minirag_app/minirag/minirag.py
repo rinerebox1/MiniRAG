@@ -617,6 +617,7 @@ class MiniRAG:
                 self.entities_vdb,
                 self.relationships_vdb,
                 self.text_chunks,
+                self.chunks_vdb,
                 param,
                 asdict(self),
             )

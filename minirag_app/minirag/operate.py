@@ -420,6 +420,7 @@ async def local_query(
     knowledge_graph_inst: BaseGraphStorage,
     entities_vdb: BaseVectorStorage,
     relationships_vdb: BaseVectorStorage,
+    chunks_vdb: BaseVectorStorage,
     text_chunks_db: BaseKVStorage[TextChunkSchema],
     query_param: QueryParam,
     global_config: dict,
@@ -458,6 +459,7 @@ async def local_query(
             keywords,
             knowledge_graph_inst,
             entities_vdb,
+            chunks_vdb,
             text_chunks_db,
             query_param,
         )
@@ -494,6 +496,7 @@ async def _build_local_query_context(
     query,
     knowledge_graph_inst: BaseGraphStorage,
     entities_vdb: BaseVectorStorage,
+    chunks_vdb: BaseVectorStorage,
     text_chunks_db: BaseKVStorage[TextChunkSchema],
     query_param: QueryParam,
 ):
@@ -523,9 +526,19 @@ async def _build_local_query_context(
     use_text_units = await _find_most_related_text_unit_from_entities(
         node_datas, query_param, text_chunks_db, knowledge_graph_inst
     )
-    
+
+    # 取得したチャンクの距離を一括取得
+    if use_text_units:
+        chunk_ids_set = {u["id"] for u in use_text_units}
+        results_dist = await chunks_vdb.query(query, top_k=len(chunk_ids_set) * 2, debug=False)
+        dist_lookup = {r["id"]: r.get("distance") for r in results_dist if r["id"] in chunk_ids_set}
+        for u in use_text_units:
+            u["_distance"] = dist_lookup.get(u["id"], "N/A")
+
     # 取得したチャンクに対してメタデータフィルタを適用
     if query_param.metadata_filter:
+        # フィルタ適用前の件数を記録
+        _before_cnt = len(use_text_units)
         filtered_text_units = []
         for unit in use_text_units:
             chunk_metadata_raw = unit.get("metadata")
@@ -540,7 +553,7 @@ async def _build_local_query_context(
                         chunk_metadata = parsed_meta
                 except json.JSONDecodeError:
                     pass  # パース失敗時は空の辞書として扱う
-            
+
             is_match = True
             for key, value in query_param.metadata_filter.items():
                 if chunk_metadata.get(key) != value:
@@ -549,6 +562,39 @@ async def _build_local_query_context(
             if is_match:
                 filtered_text_units.append(unit)
         use_text_units = filtered_text_units
+
+        # フィルタ結果をデバッグ出力
+        print(
+            f"[LOCAL] 🔍 Metadata filter {query_param.metadata_filter} applied at KG stage: "
+            f"{_before_cnt} -> {len(use_text_units)} chunks matched"
+        )
+        if len(use_text_units):
+            _preview_ids = [unit.get("id", "")[:16] + "..." for unit in use_text_units[:3]]
+            print(f"🔍 Matched chunk ids (preview): {_preview_ids}")
+
+            # 先頭3件のメタデータ詳細を表示
+            print("🔎 Raw metadata (after KG filter):")
+            for unit in use_text_units[:3]:
+                _cid = unit.get("id", "")
+                _cid_disp = _cid[:16] + "..." if _cid else "N/A"
+                _raw_meta = unit.get("metadata")
+                _meta_dict = {}
+                if isinstance(_raw_meta, dict):
+                    _meta_dict = _raw_meta
+                elif isinstance(_raw_meta, str):
+                    try:
+                        _meta_dict = json.loads(_raw_meta)
+                    except Exception:
+                        _meta_dict = {}
+
+                _category = _meta_dict.get("category", "N/A")
+
+                _distance_val = unit.get("_distance", "N/A")
+                print(f"   - ID: {_cid_disp}")
+                print(f"     Raw metadata: {_raw_meta}")
+                print(f"     Extracted category: {_category}")
+                print(f"     Distance: {_distance_val}")
+                print(f"     Metadata type: {type(_raw_meta)}")
 
     use_relations = await _find_most_related_edges_from_entities(
         node_datas, query_param, knowledge_graph_inst
@@ -726,6 +772,7 @@ async def global_query(
     knowledge_graph_inst: BaseGraphStorage,
     entities_vdb: BaseVectorStorage,
     relationships_vdb: BaseVectorStorage,
+    chunks_vdb: BaseVectorStorage,
     text_chunks_db: BaseKVStorage[TextChunkSchema],
     query_param: QueryParam,
     global_config: dict,
@@ -766,6 +813,7 @@ async def global_query(
             knowledge_graph_inst,
             entities_vdb,
             relationships_vdb,
+            chunks_vdb,
             text_chunks_db,
             query_param,
         )
@@ -805,6 +853,7 @@ async def _build_global_query_context(
     knowledge_graph_inst: BaseGraphStorage,
     entities_vdb: BaseVectorStorage,
     relationships_vdb: BaseVectorStorage,
+    chunks_vdb: BaseVectorStorage,
     text_chunks_db: BaseKVStorage[TextChunkSchema],
     query_param: QueryParam,
 ):
@@ -848,9 +897,18 @@ async def _build_global_query_context(
     use_text_units = await _find_related_text_unit_from_relationships(
         edge_datas, query_param, text_chunks_db, knowledge_graph_inst
     )
-    
+
+    # 距離計算
+    if use_text_units:
+        cid_set = {u["id"] for u in use_text_units}
+        dist_results = await chunks_vdb.query(keywords, top_k=len(cid_set) * 2, debug=False)
+        dist_lookup = {r["id"]: r.get("distance") for r in dist_results if r["id"] in cid_set}
+        for u in use_text_units:
+            u["_distance"] = dist_lookup.get(u["id"], "N/A")
+
     # 取得したチャンクに対してメタデータフィルタを適用
     if query_param.metadata_filter:
+        _before_cnt = len(use_text_units)
         filtered_text_units = []
         for unit in use_text_units:
             chunk_metadata_raw = unit.get("metadata")
@@ -865,7 +923,7 @@ async def _build_global_query_context(
                         chunk_metadata = parsed_meta
                 except json.JSONDecodeError:
                     pass  # パース失敗時は空の辞書として扱う
-            
+
             is_match = True
             for key, value in query_param.metadata_filter.items():
                 if chunk_metadata.get(key) != value:
@@ -874,6 +932,37 @@ async def _build_global_query_context(
             if is_match:
                 filtered_text_units.append(unit)
         use_text_units = filtered_text_units
+
+        print(
+            f"[GLOBAL] 🔍 Metadata filter {query_param.metadata_filter} applied at KG stage: "
+            f"{_before_cnt} -> {len(use_text_units)} chunks matched"
+        )
+        if len(use_text_units):
+            _preview_ids = [unit.get("id", "")[:16] + "..." for unit in use_text_units[:3]]
+            print(f"🔍 Matched chunk ids (preview): {_preview_ids}")
+
+            print("🔎 Raw metadata (after KG filter):")
+            for unit in use_text_units[:3]:
+                _cid = unit.get("id", "")
+                _cid_disp = _cid[:16] + "..." if _cid else "N/A"
+                _raw_meta = unit.get("metadata")
+                _meta_dict = {}
+                if isinstance(_raw_meta, dict):
+                    _meta_dict = _raw_meta
+                elif isinstance(_raw_meta, str):
+                    try:
+                        _meta_dict = json.loads(_raw_meta)
+                    except Exception:
+                        _meta_dict = {}
+
+                _category = _meta_dict.get("category", "N/A")
+
+                _distance_val = unit.get("_distance", "N/A")
+                print(f"   - ID: {_cid_disp}")
+                print(f"     Raw metadata: {_raw_meta}")
+                print(f"     Extracted category: {_category}")
+                print(f"     Distance: {_distance_val}")
+                print(f"     Metadata type: {type(_raw_meta)}")
 
     logger.info(
         f"Global query uses {len(use_entities)} entites, {len(edge_datas)} relations, {len(use_text_units)} text units"
@@ -1006,6 +1095,7 @@ async def hybrid_query(
     entities_vdb: BaseVectorStorage,
     relationships_vdb: BaseVectorStorage,
     text_chunks_db: BaseKVStorage[TextChunkSchema],
+    chunks_vdb: BaseVectorStorage,
     query_param: QueryParam,
     global_config: dict,
 ) -> str:
@@ -1047,6 +1137,7 @@ async def hybrid_query(
             ll_keywords,
             knowledge_graph_inst,
             entities_vdb,
+            chunks_vdb,
             text_chunks_db,
             query_param,
         )
@@ -1062,6 +1153,7 @@ async def hybrid_query(
             knowledge_graph_inst,
             entities_vdb,
             relationships_vdb,
+            chunks_vdb,
             text_chunks_db,
             query_param,
         )

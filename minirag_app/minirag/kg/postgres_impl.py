@@ -505,6 +505,7 @@ class PGVectorStorage(BaseVectorStorage):
         metadata_filter: dict = None,
         start_time: str = None,
         end_time: str = None,
+        debug: bool = True,
     ) -> Union[dict, list[dict]]:
         """向量数据库を検索"""
         embeddings = await self.embedding_func([query])
@@ -518,7 +519,8 @@ class PGVectorStorage(BaseVectorStorage):
         # デバッグ用：一時的にdistance閾値を緩くする
         temp_threshold = -1.0  # 全てのベクトルを許可
         params = [self.db.workspace, temp_threshold]
-        print(f"🎯 Using temporary distance threshold: {temp_threshold} (original: {self.cosine_better_than_threshold})")
+        if debug:
+            print(f"🎯 Using temporary distance threshold: {temp_threshold} (original: {self.cosine_better_than_threshold})")
         
         param_idx = 3 # パラメータインデックスは$3から開始
 
@@ -540,7 +542,8 @@ class PGVectorStorage(BaseVectorStorage):
                     )""")
                     params.append(str(value))
                 param_idx += 1
-                print(f"🔧 Flexible metadata filter: {key} = {str(value)} (handles both object and string types)")
+                if debug:
+                    print(f"🔧 Flexible metadata filter: {key} = {str(value)} (handles both object and string types)")
         
         if start_time:
             # 文字列なら datetime にパース
@@ -583,62 +586,67 @@ class PGVectorStorage(BaseVectorStorage):
 
         # デバッグ情報を追加
         if metadata_filter:
-            print(f"🔍 Metadata filter applied: {metadata_filter}")
-            print(f"🔍 Generated SQL: {sql}")
-            print(f"🔍 Parameters: {params}")
+            if debug:
+                print(f"🔍 Metadata filter applied: {metadata_filter}")
+                print(f"🔍 Generated SQL: {sql}")
+                print(f"🔍 Parameters: {params}")
         else:
-            print(f"🔍 No metadata filter applied")
+            if debug and self.namespace == "chunks":
+                print("🔍 No metadata filter applied")
 
         # クエリ実行
         try:
             results = await self.db.query(sql, params, multirows=True)
-            print(f"📊 Query returned {len(results) if results else 0} results")
+            if debug:
+                print(f"📊 Query returned {len(results) if results else 0} results")
             
             # 結果を表示（最初の2件）
-            if results:
+            if debug and results:
                 for i, result in enumerate(results[:2]):
                     print(f"✅ Result {i+1}: id={result.get('id', '')[:16]}..., distance={result.get('distance', 'N/A')}")
             
             # データベースの状況を確認（名前空間ごとにテーブルを判定）
-            table_name = NAMESPACE_TABLE_MAP.get(self.namespace, "LIGHTRAG_DOC_CHUNKS")
-            debug_sql = f"SELECT COUNT(*) as total FROM {table_name} WHERE workspace=$1"
-            count_result = await self.db.query(debug_sql, [self.db.workspace])
-            total_records = count_result["total"] if count_result else 0
+            if debug:
+                table_name = NAMESPACE_TABLE_MAP.get(self.namespace, "LIGHTRAG_DOC_CHUNKS")
+                debug_sql = f"SELECT COUNT(*) as total FROM {table_name} WHERE workspace=$1"
+                count_result = await self.db.query(debug_sql, [self.db.workspace])
+                total_records = count_result["total"] if count_result else 0
 
-            print(f"🔎 Total records in {table_name}: {total_records}")
+                print(f"🔎 Total records in {table_name}: {total_records}")
 
-            # メタデータ列が存在する前提で件数を確認
-            meta_sql = (
-                f"SELECT COUNT(*) as with_meta FROM {table_name} "
-                "WHERE workspace=$1 AND metadata IS NOT NULL AND metadata != '{}'::jsonb"
-            )
-            meta_result = await self.db.query(meta_sql, [self.db.workspace])
-            with_meta = meta_result["with_meta"] if meta_result else 0
-            print(f"🔎 Records with metadata: {with_meta}")
-
-            # メタデータを持つレコードの例（上位3件）と distance を確認
-            if with_meta > 0:
-                distance_sql = (
-                    f"SELECT id, metadata, "
-                    "CASE "
-                    "  WHEN jsonb_typeof(metadata) = 'object' THEN metadata->>'category' "
-                    "  WHEN jsonb_typeof(metadata) = 'string' THEN (metadata::text)::jsonb->>'category' "
-                    "  ELSE NULL "
-                    "END as category, "
-                    f"1 - (content_vector <=> '[{embedding_string}]'::vector) as distance "
-                    f"FROM {table_name} "
-                    "WHERE workspace=$1 AND metadata IS NOT NULL "
-                    "ORDER BY distance DESC LIMIT 3"
+                # メタデータ列が存在する前提で件数を確認
+                meta_sql = (
+                    f"SELECT COUNT(*) as with_meta FROM {table_name} "
+                    "WHERE workspace=$1 AND metadata IS NOT NULL AND metadata != '{}'::jsonb"
                 )
-                distance_results = await self.db.query(distance_sql, [self.db.workspace], multirows=True)
-                if distance_results:
-                    print("🔎 Raw metadata and distance values:")
-                    for dr in distance_results:
-                        print(f"   - ID: {dr.get('id', '')[:16]}...")
-                        print(f"     Raw metadata: {dr.get('metadata')}")
-                        print(f"     Extracted category: {dr.get('category')}")
-                        print(f"     Distance: {dr.get('distance')}")
-                        print(f"     Metadata type: {type(dr.get('metadata'))}")
+                meta_result = await self.db.query(meta_sql, [self.db.workspace])
+                with_meta = meta_result["with_meta"] if meta_result else 0
+                if self.namespace == "chunks":
+                    print(f"🔎 Records with metadata: {with_meta}")
+
+                # メタデータを持つレコードの例（上位3件）と distance を確認
+                if with_meta > 0:
+                    distance_sql = (
+                        f"SELECT id, metadata, "
+                        "CASE "
+                        "  WHEN jsonb_typeof(metadata) = 'object' THEN metadata->>'category' "
+                        "  WHEN jsonb_typeof(metadata) = 'string' THEN (metadata::text)::jsonb->>'category' "
+                        "  ELSE NULL "
+                        "END as category, "
+                        f"1 - (content_vector <=> '[{embedding_string}]'::vector) as distance "
+                        f"FROM {table_name} "
+                        "WHERE workspace=$1 AND metadata IS NOT NULL "
+                        "ORDER BY distance DESC LIMIT 3"
+                    )
+                    distance_results = await self.db.query(distance_sql, [self.db.workspace], multirows=True)
+                    if debug:
+                        print("🔎 Raw metadata and distance values:")
+                        for dr in distance_results:
+                            print(f"   - ID: {dr.get('id', '')[:16]}...")
+                            print(f"     Raw metadata: {dr.get('metadata')}")
+                            print(f"     Extracted category: {dr.get('category')}")
+                            print(f"     Distance: {dr.get('distance')}")
+                            print(f"     Metadata type: {type(dr.get('metadata'))}")
             
             return results
         except Exception as e:
