@@ -531,7 +531,8 @@ async def _build_local_query_context(
     # 取得したチャンクの距離を一括取得
     if use_text_units:
         chunk_ids_set = {u["id"] for u in use_text_units}
-        results_dist = await chunks_vdb.query(query, top_k=len(chunk_ids_set) * 2, debug=False)
+        # 明示的にデバッグ出力を有効化
+        results_dist = await chunks_vdb.query(query, top_k=len(chunk_ids_set) * 2, debug=True)
         dist_lookup = {r["id"]: r.get("distance") for r in results_dist if r["id"] in chunk_ids_set}
         for u in use_text_units:
             u["_distance"] = dist_lookup.get(u["id"], "N/A")
@@ -902,7 +903,8 @@ async def _build_global_query_context(
     # 距離計算
     if use_text_units:
         cid_set = {u["id"] for u in use_text_units}
-        dist_results = await chunks_vdb.query(keywords, top_k=len(cid_set) * 2, debug=False)
+        # 明示的にデバッグ出力を有効化
+        dist_results = await chunks_vdb.query(keywords, top_k=len(cid_set) * 2, debug=True)
         dist_lookup = {r["id"]: r.get("distance") for r in dist_results if r["id"] in cid_set}
         for u in use_text_units:
             u["_distance"] = dist_lookup.get(u["id"], "N/A")
@@ -1621,12 +1623,14 @@ async def _build_mini_query_context(
 
     scorednode2chunk(ent_from_query_dict, scored_edged_reasoning_path)
 
+    # 明示的にデバッグ出力を有効化
     results = await chunks_vdb.query(
         originalquery,
         top_k=int(query_param.top_k / 2),
         metadata_filter=query_param.metadata_filter,
         start_time=query_param.start_time,
         end_time=query_param.end_time,
+        debug=True,
     )
     chunks_ids = [r["id"] for r in results]
     final_chunk_id = kwd2chunk(
