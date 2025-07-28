@@ -500,19 +500,53 @@ class MiniRAG:
         logger.info(f"Stored {len(new_docs)} documents (overwrite={overwrite})")
 
     async def _delete_existing_chunks(self, doc_ids: list[str]) -> None:
-        """上書きモード用：指定されたドキュメントIDに関連する既存チャンクを削除"""
+        """上書きモード用：指定されたドキュメントIDに関連する既存データをカスケード削除"""
         try:
-            # ベクターDBからチャンクを削除
-            if hasattr(self.chunks_vdb, 'delete_by_doc_ids'):
-                await self.chunks_vdb.delete_by_doc_ids(doc_ids)
+            # --- 1) 対象チャンク ID を事前に取得 ---
+            chunk_ids: list[str] = []
+            if hasattr(self.text_chunks, 'db') and self.text_chunks.db:
+                ids_str = ",".join([f"'{doc_id}'" for doc_id in doc_ids])
+                sql = (
+                    f"SELECT id FROM LIGHTRAG_DOC_CHUNKS "
+                    f"WHERE workspace=$1 AND full_doc_id IN ({ids_str})"
+                )
+                rows = await self.text_chunks.db.query(sql, [self.text_chunks.db.workspace], multirows=True)
+                if rows:
+                    chunk_ids = [row["id"] for row in rows]
             
-            # テキストチャンクストレージからも削除
+            # --- 2) KG からノード・エッジを削除し、削除したエンティティ・エッジ情報を取得 ---
+            deleted_entities: list[str] = []
+            deleted_edge_pairs: list[tuple[str, str]] = []
+            if chunk_ids and hasattr(self.chunk_entity_relation_graph, 'delete_by_chunk_ids'):
+                deleted_entities, deleted_edge_pairs = await self.chunk_entity_relation_graph.delete_by_chunk_ids(chunk_ids)
+
+            # --- 3) 関連ベクターを削除（entities / entity_name / relationships） ---
+            ent_vec_ids: list[str] = [compute_mdhash_id(e, prefix="ent-") for e in deleted_entities]
+            ename_vec_ids: list[str] = [compute_mdhash_id(e, prefix="Ename-") for e in deleted_entities]
+            rel_vec_ids: list[str] = [compute_mdhash_id(src + tgt, prefix="rel-") for src, tgt in deleted_edge_pairs]
+
+            delete_tasks = []
+            if ent_vec_ids and hasattr(self.entities_vdb, 'delete_by_ids'):
+                delete_tasks.append(self.entities_vdb.delete_by_ids(ent_vec_ids))
+            if ename_vec_ids and hasattr(self.entity_name_vdb, 'delete_by_ids'):
+                delete_tasks.append(self.entity_name_vdb.delete_by_ids(ename_vec_ids))
+            if rel_vec_ids and hasattr(self.relationships_vdb, 'delete_by_ids'):
+                delete_tasks.append(self.relationships_vdb.delete_by_ids(rel_vec_ids))
+
+            # --- 4) チャンクを削除（ベクター & KV） ---
+            if hasattr(self.chunks_vdb, 'delete_by_doc_ids'):
+                delete_tasks.append(self.chunks_vdb.delete_by_doc_ids(doc_ids))
             if hasattr(self.text_chunks, 'delete_by_doc_ids'):
-                await self.text_chunks.delete_by_doc_ids(doc_ids)
-                
-            logger.info(f"Deleted existing chunks for {len(doc_ids)} documents")
+                delete_tasks.append(self.text_chunks.delete_by_doc_ids(doc_ids))
+
+            await asyncio.gather(*delete_tasks)
+
+            logger.info(
+                f"Cascade delete: docs={len(doc_ids)}, chunks={len(chunk_ids)}, "
+                f"entities={len(deleted_entities)}, relations={len(deleted_edge_pairs)}"
+            )
         except Exception as e:
-            logger.warning(f"Failed to delete existing chunks: {e}. Proceeding with upsert.")
+            logger.warning(f"Failed to cascade delete existing data: {e}. Proceeding with upsert.")
 
     async def apipeline_process_enqueue_documents(
         self,
@@ -665,6 +699,8 @@ class MiniRAG:
 
         try:
             await self.entities_vdb.delete_entity(entity_name)
+            if hasattr(self.entity_name_vdb, 'delete_entity'):
+                await self.entity_name_vdb.delete_entity(entity_name)
             await self.relationships_vdb.delete_relation(entity_name)
             await self.chunk_entity_relation_graph.delete_node(entity_name)
 

@@ -1410,6 +1410,9 @@ async def path2chunk(
         if node_chunk_id is None:
             node_datas = await asyncio.gather(*[knowledge_graph_inst.get_node(k)])
             for dp in node_datas:
+                # ノードが存在しない場合はスキップ
+                if dp is None:
+                    continue
                 text_units_node = split_string_by_multi_markers(
                     dp["source_id"], [GRAPH_FIELD_SEP]
                 )
@@ -1577,6 +1580,7 @@ async def _build_mini_query_context(
     node_datas = [
         {**n, "entity_name": k, "Score": scored_edged_reasoning_path[k]["Score"]}
         for k, n in zip(scored_edged_reasoning_path.keys(), node_datas)
+        if n is not None
     ]
     for i, n in enumerate(node_datas):
         entites_section_list.append(

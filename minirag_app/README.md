@@ -19,6 +19,7 @@ http://localhost:8165/tree?
 ◯ソースコードを変更したらこれでいい（データベースをクリーンアップする）
 sudo scripts/start.sh cleanup
 
+◯ <tool_call> がめちゃくちゃ出るのは、多分 LLM のせい。今は有料で Qwen3 を使っている。
 
 
 
@@ -26,6 +27,21 @@ sudo scripts/start.sh cleanup
 [GLOBAL] 🔍 Metadata filter {'category': 'weather'} applied at KG stage: 0 -> 0 chunks matched
 
 →ナレッジグラフはローカルクエリとグローバルクエリの2回実行される。コンテキストとして渡されるのは両方の合算。
+
+
+■ KG(ナレッジグラフ) ↔ VDB(ベクトルDB) の整合性を保つためのデリート処理は大事。(あまりないケースだと思うけど)重複するドキュメントを登録するときに一回デリートする処理が必要っぽいので、こういう実装が必要になってきた。デリート処理は非効率な気がするけど、こうしないとうまくいかなかった。
+
+● PGVectorStorage
+　・delete_entity() / delete_relation() を追加し、エンティティ名に基づくベクタ削除を実装
+　　（entities / entities_name テーブル、relationships テーブルに対応）
+● PGGraphStorage
+　・delete_node() を実装。DETACH DELETE によりノードと関連エッジを AGE から一括削除
+● MiniRAG.adelete_by_entity
+　・entity_name_vdb.delete_entity() も呼び出し、全 VDB で完全同期を確保
+これで
+・ノード削除 → エッジも自動削除（DETACH DELETE）
+・削除されたエンティティ／エッジに関連する VDB レコードも確実に削除
+という KG ↔ VDB の整合性が取れる削除フローが完成しました。
 
 
 

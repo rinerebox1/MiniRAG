@@ -655,6 +655,58 @@ class PGVectorStorage(BaseVectorStorage):
             logger.error(f"Parameters: {params}")
             raise
 
+    async def delete_by_ids(self, record_ids: list[str]) -> None:
+        """Delete vectors by their primary IDs (workspace との複合 PK)。
+
+        Args:
+            record_ids: 物理テーブルの id カラムに対応する ID 群
+        """
+        if not record_ids:
+            return
+
+        ids_str = ",".join([f"'{rid}'" for rid in record_ids])
+
+        if self.namespace == "chunks":
+            table = "LIGHTRAG_DOC_CHUNKS"
+        elif self.namespace in ["entities", "entities_name"]:
+            table = "LIGHTRAG_VDB_ENTITY"
+        elif self.namespace == "relationships":
+            table = "LIGHTRAG_VDB_RELATION"
+        else:
+            logger.warning(f"delete_by_ids not implemented for namespace: {self.namespace}")
+            return
+
+        sql = f"DELETE FROM {table} WHERE workspace=$1 AND id IN ({ids_str})"
+        await self.db.execute(sql, [self.db.workspace])
+        print(f"🗑️  Deleted {self.namespace} vector records by ids: {record_ids[:3]}... (total {len(record_ids)})")
+        logger.info(f"Deleted {self.namespace} vector records by ids: {len(record_ids)}")
+
+    async def delete_entity(self, entity_name: str):
+        """Delete entity vectors (both 'entities' と 'entities_name')."""
+        if self.namespace not in ["entities", "entities_name"]:
+            logger.warning("delete_entity called on non-entity namespace %s", self.namespace)
+            return
+
+        table = "LIGHTRAG_VDB_ENTITY"
+        sql = f"DELETE FROM {table} WHERE workspace=$1 AND entity_name=$2"
+        await self.db.execute(sql, [self.db.workspace, entity_name])
+        print(f"🗑️  Deleted entity vectors for {entity_name}")
+        logger.info("Deleted entity vectors for %s", entity_name)
+
+    async def delete_relation(self, entity_name: str):
+        """Delete relationship vectors whose src_id or tgt_id equals the entity."""
+        if self.namespace != "relationships":
+            logger.warning("delete_relation called on non-relationship namespace %s", self.namespace)
+            return
+
+        table = "LIGHTRAG_VDB_RELATION"
+        sql = (
+            f"DELETE FROM {table} WHERE workspace=$1 AND (source_id=$2 OR target_id=$2)"
+        )
+        await self.db.execute(sql, [self.db.workspace, entity_name])
+        print(f"🗑️  Deleted relationship vectors involving {entity_name}")
+        logger.info("Deleted relationship vectors involving %s", entity_name)
+
 
 @dataclass
 class PGDocStatusStorage(DocStatusStorage):
@@ -1362,6 +1414,109 @@ class PGGraphStorage(BaseGraphStorage):
 
     async def _node2vec_embed(self):
         print("Implemented but never called.")
+
+    async def delete_by_chunk_ids(self, chunk_ids: list[str]):
+        """指定されたチャンク ID 群を参照するノード・エッジを削除し、削除したエンティティ名とエッジ対を返す。
+
+        Args:
+            chunk_ids: LIGHTRAG_DOC_CHUNKS.id に相当するチャンク ID
+
+        Returns:
+            tuple[ list[str], list[tuple[str,str]] ] :
+                削除したエンティティ名（node_id デコード済み）と、削除したエッジ (src,tgt) ペア。
+        """
+        if not chunk_ids:
+            return [], []
+
+        deleted_entities: set[str] = set()
+        deleted_edge_pairs: set[tuple[str, str]] = set()
+
+        for cid in chunk_ids:
+            # --- 1) 対象ノードを取得 ---
+            query_nodes = (
+                """SELECT * FROM cypher('%s', $$
+                   MATCH (n:Entity)
+                   WHERE properties(n).source_id CONTAINS "%s"
+                   RETURN properties(n).node_id AS node_id
+                 $$) AS (node_id agtype)"""
+                % (self.graph_name, cid)
+            )
+            try:
+                node_records = await self._query(query_nodes)
+                for rec in node_records:
+                    node_enc = rec.get("node_id")
+                    if node_enc:
+                        node_dec = PGGraphStorage._decode_graph_label(node_enc)
+                        deleted_entities.add(node_dec)
+            except Exception as e:
+                logger.error(f"Error searching nodes for chunk {cid}: {e}")
+
+            # --- 2) 対象エッジを取得 ---
+            query_edges = (
+                """SELECT * FROM cypher('%s', $$
+                   MATCH (a:Entity)-[r]->(b:Entity)
+                   WHERE properties(r).source_id CONTAINS "%s"
+                   RETURN properties(a).node_id AS src, properties(b).node_id AS tgt
+                 $$) AS (src agtype, tgt agtype)"""
+                % (self.graph_name, cid)
+            )
+            try:
+                edge_records = await self._query(query_edges)
+                for rec in edge_records:
+                    src_enc = rec.get("src")
+                    tgt_enc = rec.get("tgt")
+                    if src_enc and tgt_enc:
+                        src_dec = PGGraphStorage._decode_graph_label(src_enc)
+                        tgt_dec = PGGraphStorage._decode_graph_label(tgt_enc)
+                        deleted_edge_pairs.add(tuple(sorted((src_dec, tgt_dec))))
+            except Exception as e:
+                logger.error(f"Error searching edges for chunk {cid}: {e}")
+
+            # --- 3) エッジ削除（source_id が該当チャンクを含むもの） ---
+            del_edge_query = (
+                """SELECT * FROM cypher('%s', $$
+                   MATCH ()-[r]->() WHERE properties(r).source_id CONTAINS "%s" DELETE r
+                 $$) AS (ignored agtype)"""
+                % (self.graph_name, cid)
+            )
+            try:
+                await self._query(del_edge_query, readonly=False)
+            except Exception as e:
+                logger.error(f"Error deleting edges for chunk {cid}: {e}")
+
+            # --- 4) ノード削除（該当チャンクを参照するノード） ---
+            del_node_query = (
+                """SELECT * FROM cypher('%s', $$
+                   MATCH (n:Entity) WHERE properties(n).source_id CONTAINS "%s" DETACH DELETE n
+                 $$) AS (ignored agtype)"""
+                % (self.graph_name, cid)
+            )
+            try:
+                await self._query(del_node_query, readonly=False)
+            except Exception as e:
+                logger.error(f"Error deleting nodes for chunk {cid}: {e}")
+
+        if deleted_entities:
+            print(f"🗑️  Deleted {len(deleted_entities)} nodes referencing chunks")
+        if deleted_edge_pairs:
+            print(f"🗑️  Deleted {len(deleted_edge_pairs)} edges referencing chunks")
+
+        return list(deleted_entities), list(deleted_edge_pairs)
+
+    async def delete_node(self, node_id: str):
+        """Delete a node and its connected edges from AGE graph."""
+        label = PGGraphStorage._encode_graph_label(node_id.strip('"'))
+        query = (
+            """SELECT * FROM cypher('%s', $$
+               MATCH (n:Entity {node_id: \"%s\"}) DETACH DELETE n
+             $$) AS (ignored agtype)"""
+            % (self.graph_name, label)
+        )
+        try:
+            await self._query(query, readonly=False)
+            logger.info("Deleted node %s (and attached edges) from AGE", node_id)
+        except Exception as e:
+            logger.error("Error deleting node %s: %s", node_id, e)
 
 
 NAMESPACE_TABLE_MAP = {
