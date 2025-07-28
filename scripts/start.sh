@@ -3,6 +3,10 @@
 
 # 引数の確認
 CLEANUP_DB=false
+if [ "$1" = "cleanup" ]; then
+    CLEANUP_DB=true
+    echo "DBクリーンアップモードで起動します..."
+fi
 
 # DBクリーンアップの実行
 if [ "$CLEANUP_DB" = true ]; then

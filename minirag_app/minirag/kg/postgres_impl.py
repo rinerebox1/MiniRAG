@@ -404,6 +404,7 @@ class PGVectorStorage(BaseVectorStorage):
             "entity_name": item["entity_name"],
             "content": item["content"],
             "content_vector": json.dumps(item["__vector__"].tolist()),
+            "metadata": _jsonb(item.get("metadata")),
         }
         return upsert_sql, data
 
@@ -416,6 +417,7 @@ class PGVectorStorage(BaseVectorStorage):
             "target_id": item["tgt_id"],
             "content": item["content"],
             "content_vector": json.dumps(item["__vector__"].tolist()),
+            "metadata": _jsonb(item.get("metadata")),
         }
         return upsert_sql, data
 
@@ -597,38 +599,46 @@ class PGVectorStorage(BaseVectorStorage):
                 for i, result in enumerate(results[:2]):
                     print(f"✅ Result {i+1}: id={result.get('id', '')[:16]}..., distance={result.get('distance', 'N/A')}")
             
-            # データベースの状況を確認
-            debug_sql = f"SELECT COUNT(*) as total FROM LIGHTRAG_DOC_CHUNKS WHERE workspace=$1"
+            # データベースの状況を確認（名前空間ごとにテーブルを判定）
+            table_name = NAMESPACE_TABLE_MAP.get(self.namespace, "LIGHTRAG_DOC_CHUNKS")
+            debug_sql = f"SELECT COUNT(*) as total FROM {table_name} WHERE workspace=$1"
             count_result = await self.db.query(debug_sql, [self.db.workspace])
-            total_chunks = count_result['total'] if count_result else 0
-            print(f"🔎 Total chunks in database: {total_chunks}")
-            
-            if metadata_filter:
-                # メタデータ有りのチャンク数をチェック
-                meta_sql = f"SELECT COUNT(*) as with_meta FROM LIGHTRAG_DOC_CHUNKS WHERE workspace=$1 AND metadata IS NOT NULL AND metadata != '{{}}'::jsonb"
-                meta_result = await self.db.query(meta_sql, [self.db.workspace])
-                with_meta = meta_result['with_meta'] if meta_result else 0
-                print(f"🔎 Chunks with metadata: {with_meta}")
-                
-                # 実際のdistance値とメタデータの生の値を確認
-                distance_sql = """SELECT id, metadata, 
-                                 CASE 
-                                     WHEN jsonb_typeof(metadata) = 'object' THEN metadata->>'category'
-                                     WHEN jsonb_typeof(metadata) = 'string' THEN (metadata::text)::jsonb->>'category'
-                                     ELSE NULL
-                                 END as category,
-                                 1 - (content_vector <=> '[{embedding_string}]'::vector) as distance
-                                 FROM LIGHTRAG_DOC_CHUNKS 
-                                 WHERE workspace=$1 AND metadata IS NOT NULL 
-                                 ORDER BY distance DESC LIMIT 3""".format(embedding_string=embedding_string)
+            total_records = count_result["total"] if count_result else 0
+
+            print(f"🔎 Total records in {table_name}: {total_records}")
+
+            # メタデータ列が存在する前提で件数を確認
+            meta_sql = (
+                f"SELECT COUNT(*) as with_meta FROM {table_name} "
+                "WHERE workspace=$1 AND metadata IS NOT NULL AND metadata != '{}'::jsonb"
+            )
+            meta_result = await self.db.query(meta_sql, [self.db.workspace])
+            with_meta = meta_result["with_meta"] if meta_result else 0
+            print(f"🔎 Records with metadata: {with_meta}")
+
+            # メタデータを持つレコードの例（上位3件）と distance を確認
+            if with_meta > 0:
+                distance_sql = (
+                    f"SELECT id, metadata, "
+                    "CASE "
+                    "  WHEN jsonb_typeof(metadata) = 'object' THEN metadata->>'category' "
+                    "  WHEN jsonb_typeof(metadata) = 'string' THEN (metadata::text)::jsonb->>'category' "
+                    "  ELSE NULL "
+                    "END as category, "
+                    f"1 - (content_vector <=> '[{embedding_string}]'::vector) as distance "
+                    f"FROM {table_name} "
+                    "WHERE workspace=$1 AND metadata IS NOT NULL "
+                    "ORDER BY distance DESC LIMIT 3"
+                )
                 distance_results = await self.db.query(distance_sql, [self.db.workspace], multirows=True)
-                print(f"🔎 Raw metadata and distance values:")
-                for dr in distance_results:
-                    print(f"   - ID: {dr.get('id', '')[:16]}...")
-                    print(f"     Raw metadata: {dr.get('metadata')}")
-                    print(f"     Extracted category: {dr.get('category')}")
-                    print(f"     Distance: {dr.get('distance')}")
-                    print(f"     Metadata type: {type(dr.get('metadata'))}")
+                if distance_results:
+                    print("🔎 Raw metadata and distance values:")
+                    for dr in distance_results:
+                        print(f"   - ID: {dr.get('id', '')[:16]}...")
+                        print(f"     Raw metadata: {dr.get('metadata')}")
+                        print(f"     Extracted category: {dr.get('category')}")
+                        print(f"     Distance: {dr.get('distance')}")
+                        print(f"     Metadata type: {type(dr.get('metadata'))}")
             
             return results
         except Exception as e:
@@ -1447,7 +1457,7 @@ SQL_TEMPLATES = {
                                 FROM LIGHTRAG_DOC_FULL WHERE workspace=$1 AND id=$2
                             """,
     "get_by_id_text_chunks": """SELECT id, tokens, COALESCE(content, '') as content,
-                                chunk_order_index, full_doc_id
+                                chunk_order_index, full_doc_id, metadata
                                 FROM LIGHTRAG_DOC_CHUNKS WHERE workspace=$1 AND id=$2
                             """,
     "get_by_id_llm_response_cache": """SELECT id, original_prompt, COALESCE(return_value, '') as "return", mode
@@ -1460,7 +1470,7 @@ SQL_TEMPLATES = {
                                  FROM LIGHTRAG_DOC_FULL WHERE workspace=$1 AND id IN ({ids})
                             """,
     "get_by_ids_text_chunks": """SELECT id, tokens, COALESCE(content, '') as content,
-                                  chunk_order_index, full_doc_id
+                                  chunk_order_index, full_doc_id, metadata
                                    FROM LIGHTRAG_DOC_CHUNKS WHERE workspace=$1 AND id IN ({ids})
                                 """,
     "get_by_ids_llm_response_cache": """SELECT id, original_prompt, COALESCE(return_value, '') as "return", mode
@@ -1492,22 +1502,24 @@ SQL_TEMPLATES = {
                       metadata=EXCLUDED.metadata,
                       updated_at = CURRENT_TIMESTAMP
                      """,
-    "upsert_entity": """INSERT INTO LIGHTRAG_VDB_ENTITY (workspace, id, entity_name, content, content_vector)
-                      VALUES ($1, $2, $3, $4, $5)
+    "upsert_entity": """INSERT INTO LIGHTRAG_VDB_ENTITY (workspace, id, entity_name, content, content_vector, metadata)
+                      VALUES ($1, $2, $3, $4, $5, $6::jsonb)
                       ON CONFLICT (workspace,id) DO UPDATE
                       SET entity_name=EXCLUDED.entity_name,
                       content=EXCLUDED.content,
                       content_vector=EXCLUDED.content_vector,
+                      metadata=EXCLUDED.metadata,
                       updated_at=CURRENT_TIMESTAMP
                      """,
     "upsert_relationship": """INSERT INTO LIGHTRAG_VDB_RELATION (workspace, id, source_id,
-                      target_id, content, content_vector)
-                      VALUES ($1, $2, $3, $4, $5, $6)
+                      target_id, content, content_vector, metadata)
+                      VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb)
                       ON CONFLICT (workspace,id) DO UPDATE
                       SET source_id=EXCLUDED.source_id,
                       target_id=EXCLUDED.target_id,
                       content=EXCLUDED.content,
                       content_vector=EXCLUDED.content_vector,
+                      metadata=EXCLUDED.metadata,
                       updated_at = CURRENT_TIMESTAMP
                      """,
     # SQL for VectorStorage

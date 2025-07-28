@@ -369,14 +369,14 @@ class MiniRAG:
         )
 
         # Perform additional entity extraction as per original ainsert logic
+        processed_docs = await self.doc_status.get_docs_by_status(DocStatus.PROCESSED)
         inserting_chunks = {
             compute_mdhash_id(dp["content"], prefix="chunk-"): {
                 **dp,
                 "full_doc_id": doc_id,
+                "metadata": status_doc.metadata or {},
             }
-            for doc_id, status_doc in (
-                await self.doc_status.get_docs_by_status(DocStatus.PROCESSED)
-            ).items()
+            for doc_id, status_doc in processed_docs.items()
             for dp in self.chunking_func(
                 status_doc.content,
                 self.chunk_overlap_token_size,

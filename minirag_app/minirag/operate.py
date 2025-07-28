@@ -228,6 +228,7 @@ async def _merge_edges_then_upsert(
         tgt_id=tgt_id,
         description=description,
         keywords=keywords,
+        source_id=source_id,
     )
 
     return edge_data
@@ -369,6 +370,7 @@ async def extract_entities(
             compute_mdhash_id(dp["entity_name"], prefix="ent-"): {
                 "content": dp["entity_name"] + dp["description"],
                 "entity_name": dp["entity_name"],
+                "metadata": chunks.get(dp["source_id"].split(GRAPH_FIELD_SEP)[0], {}).get("metadata", {}),
             }
             for dp in all_entities_data
         }
@@ -378,6 +380,7 @@ async def extract_entities(
             compute_mdhash_id(dp["entity_name"], prefix="ent-"): {
                 "content": dp["entity_name"] + " " + dp["description"],
                 "entity_name": dp["entity_name"],
+                "metadata": chunks.get(dp["source_id"].split(GRAPH_FIELD_SEP)[0], {}).get("metadata", {}),
             }
             for dp in all_entities_data
         }
@@ -402,6 +405,7 @@ async def extract_entities(
                 + " " + dp["src_id"]
                 + " " + dp["tgt_id"]
                 + " " + dp["description"],
+                "metadata": chunks.get(dp["source_id"].split(GRAPH_FIELD_SEP)[0], {}).get("metadata", {}),
             }
             for dp in all_relationships_data
         }
@@ -450,13 +454,16 @@ async def local_query(
             print(f"JSON parsing error: {e}")
             return PROMPTS["fail_response"]
     if keywords:
-        context = await _build_local_query_context(
+        context, source = await _build_local_query_context(
             keywords,
             knowledge_graph_inst,
             entities_vdb,
             text_chunks_db,
             query_param,
         )
+        # Noneが返された場合の処理
+        if context is None:
+            context, source = None, []
     if query_param.only_need_context:
         return context
     if context is None:
@@ -493,13 +500,13 @@ async def _build_local_query_context(
     results = await entities_vdb.query(
         query,
         top_k=query_param.top_k,
-        metadata_filter=query_param.metadata_filter,
+        # metadata_filter=query_param.metadata_filter, # メタデータでの絞り込みはチャンク取得後に行う
         start_time=query_param.start_time,
         end_time=query_param.end_time,
     )
 
     if not len(results):
-        return None
+        return None, []
     node_datas = await asyncio.gather(
         *[knowledge_graph_inst.get_node(r["entity_name"]) for r in results]
     )
@@ -516,6 +523,33 @@ async def _build_local_query_context(
     use_text_units = await _find_most_related_text_unit_from_entities(
         node_datas, query_param, text_chunks_db, knowledge_graph_inst
     )
+    
+    # 取得したチャンクに対してメタデータフィルタを適用
+    if query_param.metadata_filter:
+        filtered_text_units = []
+        for unit in use_text_units:
+            chunk_metadata_raw = unit.get("metadata")
+            chunk_metadata = {}
+            if isinstance(chunk_metadata_raw, dict):
+                chunk_metadata = chunk_metadata_raw
+            elif isinstance(chunk_metadata_raw, str):
+                try:
+                    # 文字列の場合、JSONとしてパースを試みる
+                    parsed_meta = json.loads(chunk_metadata_raw)
+                    if isinstance(parsed_meta, dict):
+                        chunk_metadata = parsed_meta
+                except json.JSONDecodeError:
+                    pass  # パース失敗時は空の辞書として扱う
+            
+            is_match = True
+            for key, value in query_param.metadata_filter.items():
+                if chunk_metadata.get(key) != value:
+                    is_match = False
+                    break
+            if is_match:
+                filtered_text_units.append(unit)
+        use_text_units = filtered_text_units
+
     use_relations = await _find_most_related_edges_from_entities(
         node_datas, query_param, knowledge_graph_inst
     )
@@ -553,10 +587,12 @@ async def _build_local_query_context(
     relations_context = list_of_list_to_csv(relations_section_list)
 
     text_units_section_list = [["id", "content"]]
+    source = []  # sourceリストを追加
     for i, t in enumerate(use_text_units):
         text_units_section_list.append([i, t["content"]])
+        source.append(t["content"])  # sourceリストに追加
     text_units_context = list_of_list_to_csv(text_units_section_list)
-    return f"""
+    context = f"""
 -----Entities-----
 ```csv
 {entities_context}
@@ -570,6 +606,7 @@ async def _build_local_query_context(
 {text_units_context}
 ```
 """
+    return context, source  # contextとsourceの両方を返す
 
 
 async def _find_most_related_text_unit_from_entities(
@@ -724,7 +761,7 @@ async def global_query(
             print(f"JSON parsing error: {e}")
             return PROMPTS["fail_response"]
     if keywords:
-        context = await _build_global_query_context(
+        context, source = await _build_global_query_context(
             keywords,
             knowledge_graph_inst,
             entities_vdb,
@@ -732,6 +769,9 @@ async def global_query(
             text_chunks_db,
             query_param,
         )
+        # Noneが返された場合の処理
+        if context is None:
+            context, source = None, []
 
     if query_param.only_need_context:
         return context
@@ -771,13 +811,13 @@ async def _build_global_query_context(
     results = await relationships_vdb.query(
         keywords,
         top_k=query_param.top_k,
-        metadata_filter=query_param.metadata_filter,
+        # metadata_filter=query_param.metadata_filter, # メタデータでの絞り込みはチャンク取得後に行う
         start_time=query_param.start_time,
         end_time=query_param.end_time,
     )
 
     if not len(results):
-        return None
+        return None, []
 
     edge_datas = await asyncio.gather(
         *[knowledge_graph_inst.get_edge(r["src_id"], r["tgt_id"]) for r in results]
@@ -808,6 +848,33 @@ async def _build_global_query_context(
     use_text_units = await _find_related_text_unit_from_relationships(
         edge_datas, query_param, text_chunks_db, knowledge_graph_inst
     )
+    
+    # 取得したチャンクに対してメタデータフィルタを適用
+    if query_param.metadata_filter:
+        filtered_text_units = []
+        for unit in use_text_units:
+            chunk_metadata_raw = unit.get("metadata")
+            chunk_metadata = {}
+            if isinstance(chunk_metadata_raw, dict):
+                chunk_metadata = chunk_metadata_raw
+            elif isinstance(chunk_metadata_raw, str):
+                try:
+                    # 文字列の場合、JSONとしてパースを試みる
+                    parsed_meta = json.loads(chunk_metadata_raw)
+                    if isinstance(parsed_meta, dict):
+                        chunk_metadata = parsed_meta
+                except json.JSONDecodeError:
+                    pass  # パース失敗時は空の辞書として扱う
+            
+            is_match = True
+            for key, value in query_param.metadata_filter.items():
+                if chunk_metadata.get(key) != value:
+                    is_match = False
+                    break
+            if is_match:
+                filtered_text_units.append(unit)
+        use_text_units = filtered_text_units
+
     logger.info(
         f"Global query uses {len(use_entities)} entites, {len(edge_datas)} relations, {len(use_text_units)} text units"
     )
@@ -842,11 +909,13 @@ async def _build_global_query_context(
     entities_context = list_of_list_to_csv(entites_section_list)
 
     text_units_section_list = [["id", "content"]]
+    source = []  # sourceリストを追加
     for i, t in enumerate(use_text_units):
         text_units_section_list.append([i, t["content"]])
+        source.append(t["content"])  # sourceリストに追加
     text_units_context = list_of_list_to_csv(text_units_section_list)
 
-    return f"""
+    context = f"""
 -----Entities-----
 ```csv
 {entities_context}
@@ -860,6 +929,7 @@ async def _build_global_query_context(
 {text_units_context}
 ```
 """
+    return context, source  # contextとsourceの両方を返す
 
 
 async def _find_most_related_entities_from_relationships(
@@ -973,16 +1043,21 @@ async def hybrid_query(
             print(f"JSON parsing error: {e}")
             return PROMPTS["fail_response"], []
     if ll_keywords:
-        low_level_context = await _build_local_query_context(
+        low_level_context, ll_source = await _build_local_query_context(
             ll_keywords,
             knowledge_graph_inst,
             entities_vdb,
             text_chunks_db,
             query_param,
         )
+        # None が返された場合の処理
+        if low_level_context is None:
+            ll_source = []
+    else:
+        low_level_context, ll_source = None, []
 
     if hl_keywords:
-        high_level_context = await _build_global_query_context(
+        high_level_context, hl_source = await _build_global_query_context(
             hl_keywords,
             knowledge_graph_inst,
             entities_vdb,
@@ -990,8 +1065,15 @@ async def hybrid_query(
             text_chunks_db,
             query_param,
         )
+        # None が返された場合の処理
+        if high_level_context is None:
+            hl_source = []
+    else:
+        high_level_context, hl_source = None, []
 
-    context, source = combine_contexts(high_level_context, low_level_context)
+    context, _ = combine_contexts(high_level_context, low_level_context)
+    # 直接sourceを結合
+    source = ll_source + hl_source
 
     if query_param.only_need_context:
         return context, source
