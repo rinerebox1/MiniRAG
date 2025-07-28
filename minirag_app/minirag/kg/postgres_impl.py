@@ -516,11 +516,9 @@ class PGVectorStorage(BaseVectorStorage):
         
         # WHERE句を動的に構築
         where_clauses = ["workspace=$1", "distance>$2"]
-        # デバッグ用：一時的にdistance閾値を緩くする
-        temp_threshold = -1.0  # 全てのベクトルを許可
-        params = [self.db.workspace, temp_threshold]
+        params = [self.db.workspace, self.cosine_better_than_threshold]
         if debug:
-            print(f"🎯 Using temporary distance threshold: {temp_threshold} (original: {self.cosine_better_than_threshold})")
+            print(f"🎯 Using distance threshold: {self.cosine_better_than_threshold}")
         
         param_idx = 3 # パラメータインデックスは$3から開始
 
