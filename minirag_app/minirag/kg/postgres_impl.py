@@ -360,6 +360,26 @@ class PGKVStorage(BaseKVStorage):
         if self.namespace in ["full_docs", "text_chunks"]:
             logger.info("full doc and chunk data had been saved into postgresql db!")
 
+    async def get_chunk_ids_by_doc_ids(self, doc_ids: list[str]) -> list[str]:
+        """PostgreSQLから指定されたdoc_idに紐づくチャンクIDを取得"""
+        if not doc_ids:
+            return []
+
+        ids_str = ",".join([f"'{doc_id}'" for doc_id in doc_ids])
+        sql = (
+            f"SELECT id FROM LIGHTRAG_DOC_CHUNKS "
+            f"WHERE workspace=$1 AND full_doc_id IN ({ids_str})"
+        )
+
+        try:
+            rows = await self.db.query(sql, [self.db.workspace], multirows=True)
+            if rows:
+                return [row["id"] for row in rows]
+            return []
+        except Exception as e:
+            logger.error(f"Failed to get chunk IDs by doc IDs: {e}")
+            return []
+
 
 @dataclass
 class PGVectorStorage(BaseVectorStorage):
@@ -477,20 +497,21 @@ class PGVectorStorage(BaseVectorStorage):
             
         doc_ids_str = ",".join([f"'{doc_id}'" for doc_id in doc_ids])
         
-        if self.namespace == "chunks":
-            # チャンクの場合はfull_doc_idで削除
-            sql = f"DELETE FROM LIGHTRAG_DOC_CHUNKS WHERE workspace=$1 AND full_doc_id IN ({doc_ids_str})"
-        elif self.namespace in ["entities", "entities_name"]:
-            # エンティティの場合は直接IDで削除（通常は必要ないが安全のため）
-            sql = f"DELETE FROM LIGHTRAG_VDB_ENTITY WHERE workspace=$1 AND id IN ({doc_ids_str})"
-        elif self.namespace == "relationships":
-            # リレーションシップの場合も同様
-            sql = f"DELETE FROM LIGHTRAG_VDB_RELATION WHERE workspace=$1 AND id IN ({doc_ids_str})"
-        else:
+        table_name = NAMESPACE_TABLE_MAP.get(self.namespace)
+        if not table_name:
             logger.warning(f"delete_by_doc_ids not implemented for namespace: {self.namespace}")
             return
+
+        # チャンクとフルドキュメントは `full_doc_id` で削除
+        if self.namespace in ["chunks", "full_docs"]:
+            id_column = "full_doc_id"
+        else:
+            # その他のVDBは直接 `id` で削除するが、通常このケースは限定的
+            id_column = "id"
+
+        sql = f"DELETE FROM {table_name} WHERE workspace=$1 AND {id_column} IN ({doc_ids_str})"
             
-        await self.db.execute(sql, {"workspace": self.db.workspace})
+        await self.db.execute(sql, [self.db.workspace])
         print(f"🗑️  Deleted {self.namespace} vector records for doc_ids: {doc_ids}")
         logger.info(f"Deleted {self.namespace} vector records for doc_ids: {doc_ids}")
 

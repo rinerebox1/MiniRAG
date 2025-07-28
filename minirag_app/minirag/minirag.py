@@ -367,34 +367,6 @@ class MiniRAG:
         await self.apipeline_process_enqueue_documents(
             split_by_character, split_by_character_only
         )
-
-        # Perform additional entity extraction as per original ainsert logic
-        processed_docs = await self.doc_status.get_docs_by_status(DocStatus.PROCESSED)
-        inserting_chunks = {
-            compute_mdhash_id(dp["content"], prefix="chunk-"): {
-                **dp,
-                "full_doc_id": doc_id,
-                "metadata": status_doc.metadata or {},
-            }
-            for doc_id, status_doc in processed_docs.items()
-            for dp in self.chunking_func(
-                status_doc.content,
-                self.chunk_overlap_token_size,
-                self.chunk_token_size,
-                self.tiktoken_model_name,
-            )
-        }
-
-        if inserting_chunks:
-            logger.info("Performing entity extraction on newly processed chunks")
-            await extract_entities(
-                inserting_chunks,
-                knowledge_graph_inst=self.chunk_entity_relation_graph,
-                entity_vdb=self.entities_vdb,
-                entity_name_vdb=self.entity_name_vdb,
-                relationships_vdb=self.relationships_vdb,
-                global_config=asdict(self),
-            )
  
         await self._insert_done()
 
@@ -502,51 +474,40 @@ class MiniRAG:
     async def _delete_existing_chunks(self, doc_ids: list[str]) -> None:
         """上書きモード用：指定されたドキュメントIDに関連する既存データをカスケード削除"""
         try:
-            # --- 1) 対象チャンク ID を事前に取得 ---
-            chunk_ids: list[str] = []
-            if hasattr(self.text_chunks, 'db') and self.text_chunks.db:
-                ids_str = ",".join([f"'{doc_id}'" for doc_id in doc_ids])
-                sql = (
-                    f"SELECT id FROM LIGHTRAG_DOC_CHUNKS "
-                    f"WHERE workspace=$1 AND full_doc_id IN ({ids_str})"
-                )
-                rows = await self.text_chunks.db.query(sql, [self.text_chunks.db.workspace], multirows=True)
-                if rows:
-                    chunk_ids = [row["id"] for row in rows]
+            # Step 1: Retrieve chunk IDs associated with the document IDs
+            chunk_ids = await self.text_chunks.get_chunk_ids_by_doc_ids(doc_ids)
+            if not chunk_ids:
+                logger.info(f"No chunks found for doc_ids: {doc_ids}. Skipping deletion.")
+                return
             
-            # --- 2) KG からノード・エッジを削除し、削除したエンティティ・エッジ情報を取得 ---
-            deleted_entities: list[str] = []
-            deleted_edge_pairs: list[tuple[str, str]] = []
-            if chunk_ids and hasattr(self.chunk_entity_relation_graph, 'delete_by_chunk_ids'):
-                deleted_entities, deleted_edge_pairs = await self.chunk_entity_relation_graph.delete_by_chunk_ids(chunk_ids)
+            # Step 2: Delete nodes and edges from the knowledge graph
+            deleted_entities, deleted_edge_pairs = await self.chunk_entity_relation_graph.delete_by_chunk_ids(chunk_ids)
 
-            # --- 3) 関連ベクターを削除（entities / entity_name / relationships） ---
-            ent_vec_ids: list[str] = [compute_mdhash_id(e, prefix="ent-") for e in deleted_entities]
-            ename_vec_ids: list[str] = [compute_mdhash_id(e, prefix="Ename-") for e in deleted_entities]
-            rel_vec_ids: list[str] = [compute_mdhash_id(src + tgt, prefix="rel-") for src, tgt in deleted_edge_pairs]
+            # Step 3: Delete related vectors
+            ent_vec_ids = [compute_mdhash_id(e, prefix="ent-") for e in deleted_entities]
+            ename_vec_ids = [compute_mdhash_id(e, prefix="Ename-") for e in deleted_entities]
+            rel_vec_ids = [compute_mdhash_id(src + tgt, prefix="rel-") for src, tgt in deleted_edge_pairs]
 
-            delete_tasks = []
-            if ent_vec_ids and hasattr(self.entities_vdb, 'delete_by_ids'):
-                delete_tasks.append(self.entities_vdb.delete_by_ids(ent_vec_ids))
-            if ename_vec_ids and hasattr(self.entity_name_vdb, 'delete_by_ids'):
-                delete_tasks.append(self.entity_name_vdb.delete_by_ids(ename_vec_ids))
-            if rel_vec_ids and hasattr(self.relationships_vdb, 'delete_by_ids'):
-                delete_tasks.append(self.relationships_vdb.delete_by_ids(rel_vec_ids))
-
-            # --- 4) チャンクを削除（ベクター & KV） ---
-            if hasattr(self.chunks_vdb, 'delete_by_doc_ids'):
-                delete_tasks.append(self.chunks_vdb.delete_by_doc_ids(doc_ids))
-            if hasattr(self.text_chunks, 'delete_by_doc_ids'):
-                delete_tasks.append(self.text_chunks.delete_by_doc_ids(doc_ids))
+            delete_tasks = [
+                self.entities_vdb.delete_by_ids(ent_vec_ids),
+                self.entity_name_vdb.delete_by_ids(ename_vec_ids),
+                self.relationships_vdb.delete_by_ids(rel_vec_ids),
+                self.chunks_vdb.delete_by_doc_ids(doc_ids),
+                self.text_chunks.delete_by_doc_ids(doc_ids)
+            ]
 
             await asyncio.gather(*delete_tasks)
 
             logger.info(
-                f"Cascade delete: docs={len(doc_ids)}, chunks={len(chunk_ids)}, "
-                f"entities={len(deleted_entities)}, relations={len(deleted_edge_pairs)}"
+                f"Cascade delete successful for {len(doc_ids)} documents: "
+                f"{len(chunk_ids)} chunks, {len(deleted_entities)} entities, "
+                f"and {len(deleted_edge_pairs)} relationships deleted."
             )
         except Exception as e:
-            logger.warning(f"Failed to cascade delete existing data: {e}. Proceeding with upsert.")
+            logger.error(f"Failed to cascade delete existing data: {e}", exc_info=True)
+            # Decide if you want to proceed or re-raise
+            # For now, we log the error and proceed, which was the previous behavior.
+            logger.warning("Proceeding with upsert despite cascade delete failure.")
 
     async def apipeline_process_enqueue_documents(
         self,
@@ -607,6 +568,18 @@ class MiniRAG:
                     ),
                     self.text_chunks.upsert(chunks),
                 )
+
+                if chunks:
+                    logger.info(f"Performing entity extraction on {len(chunks)} chunks for doc '{doc_id}'")
+                    await extract_entities(
+                        chunks,
+                        knowledge_graph_inst=self.chunk_entity_relation_graph,
+                        entity_vdb=self.entities_vdb,
+                        entity_name_vdb=self.entity_name_vdb,
+                        relationships_vdb=self.relationships_vdb,
+                        global_config=asdict(self),
+                    )
+
                 await self.doc_status.upsert(
                     {
                         doc_id: {

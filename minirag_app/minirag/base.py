@@ -76,6 +76,9 @@ class BaseVectorStorage(StorageNameSpace):
         """
         raise NotImplementedError
 
+    async def delete_by_doc_ids(self, doc_ids: list[str]) -> None:
+        raise NotImplementedError
+
 
 @dataclass
 class BaseKVStorage(Generic[T], StorageNameSpace):
@@ -100,6 +103,16 @@ class BaseKVStorage(Generic[T], StorageNameSpace):
         raise NotImplementedError
 
     async def drop(self):
+        raise NotImplementedError
+
+    async def delete_by_doc_ids(self, doc_ids: list[str]) -> None:
+        raise NotImplementedError
+
+    async def get_chunk_ids_by_doc_ids(self, doc_ids: list[str]) -> list[str]:
+        """
+        Retrieves chunk IDs associated with a list of document IDs.
+        This is particularly useful for cascading deletes.
+        """
         raise NotImplementedError
 
 

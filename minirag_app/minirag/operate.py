@@ -55,19 +55,6 @@ def chunking_by_token_size(
     return results
 
 
-async def _handle_entity_relation_summary(
-    entity_or_relation_name: str,
-    description: str,
-    global_config: dict,
-) -> str:
-    tiktoken_model_name = global_config["tiktoken_model_name"]
-    summary_max_tokens = global_config["entity_summary_to_max_tokens"]
-
-    tokens = encode_string_by_tiktoken(description, model_name=tiktoken_model_name)
-    if len(tokens) < summary_max_tokens:  # No need for summary
-        return description
-
-
 async def _handle_single_entity_extraction(
     record_attributes: list[str],
     chunk_key: str,
@@ -171,68 +158,49 @@ async def _merge_edges_then_upsert(
     knowledge_graph_inst: BaseGraphStorage,
     global_config: dict,
 ):
-    already_weights = []
-    already_source_ids = []
-    already_description = []
-    already_keywords = []
+    # Safely get existing edge and merge properties
+    already_edge = await knowledge_graph_inst.get_edge(src_id, tgt_id) or {}
 
-    # 修正: 既存のエッジがある場合は安全に取得してマージする。
-    if await knowledge_graph_inst.has_edge(src_id, tgt_id):
-        already_edge = await knowledge_graph_inst.get_edge(src_id, tgt_id)
-        # まれに has_edge が True でも get_edge が None を返すことがあるため防御的にチェックする
-        if already_edge is not None:
-            already_weights.append(already_edge.get("weight", 0.0))
-            already_source_ids.extend(
-                split_string_by_multi_markers(already_edge.get("source_id", ""), [GRAPH_FIELD_SEP])
-            )
-            already_description.append(already_edge.get("description", ""))
-            already_keywords.extend(
-                split_string_by_multi_markers(already_edge.get("keywords", ""), [GRAPH_FIELD_SEP])
-            )
+    # Combine attributes, giving precedence to new data
+    weight = sum(dp["weight"] for dp in edges_data) + already_edge.get("weight", 0.0)
 
-    weight = sum([dp["weight"] for dp in edges_data] + already_weights)
-    description = GRAPH_FIELD_SEP.join(
-        sorted(set([dp["description"] for dp in edges_data] + already_description))
-    )
-    keywords = GRAPH_FIELD_SEP.join(
-        sorted(set([dp["keywords"] for dp in edges_data] + already_keywords))
-    )
-    source_id = GRAPH_FIELD_SEP.join(
-        set([dp["source_id"] for dp in edges_data] + already_source_ids)
-    )
-    for need_insert_id in [src_id, tgt_id]:
-        if not (await knowledge_graph_inst.has_node(need_insert_id)):
+    description = GRAPH_FIELD_SEP.join(sorted(set(
+        [dp["description"] for dp in edges_data] +
+        split_string_by_multi_markers(already_edge.get("description", ""), [GRAPH_FIELD_SEP])
+    )))
+
+    keywords = GRAPH_FIELD_SEP.join(sorted(set(
+        [dp["keywords"] for dp in edges_data] +
+        split_string_by_multi_markers(already_edge.get("keywords", ""), [GRAPH_FIELD_SEP])
+    )))
+
+    source_id = GRAPH_FIELD_SEP.join(sorted(set(
+        [dp["source_id"] for dp in edges_data] +
+        split_string_by_multi_markers(already_edge.get("source_id", ""), [GRAPH_FIELD_SEP])
+    )))
+
+    # Ensure source and target nodes exist
+    for node_id in [src_id, tgt_id]:
+        if not await knowledge_graph_inst.has_node(node_id):
             await knowledge_graph_inst.upsert_node(
-                need_insert_id,
+                node_id,
                 node_data={
                     "source_id": source_id,
-                    "description": description,
+                    "description": "Auto-generated node.",
                     "entity_type": '"UNKNOWN"',
                 },
             )
-    # description = await _handle_entity_relation_summary(
-    #     (src_id, tgt_id), description, global_config
-    # )
-    await knowledge_graph_inst.upsert_edge(
-        src_id,
-        tgt_id,
-        edge_data=dict(
-            weight=weight,
-            description=description,
-            keywords=keywords,
-            source_id=source_id,
-        ),
-    )
 
     edge_data = dict(
-        src_id=src_id,
-        tgt_id=tgt_id,
+        weight=weight,
         description=description,
         keywords=keywords,
         source_id=source_id,
     )
 
-    return edge_data
+    await knowledge_graph_inst.upsert_edge(src_id, tgt_id, edge_data=edge_data)
+
+    return {"src_id": src_id, "tgt_id": tgt_id, **edge_data}
 
 
 async def extract_entities(
