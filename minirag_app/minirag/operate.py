@@ -5,6 +5,7 @@ from typing import Union
 from collections import Counter, defaultdict
 import warnings
 import json_repair
+from datetime import datetime
 
 from .utils import (
     list_of_list_to_csv,
@@ -563,38 +564,19 @@ async def _build_local_query_context(
                 filtered_text_units.append(unit)
         use_text_units = filtered_text_units
 
-        # フィルタ結果をデバッグ出力
-        print(
-            f"[LOCAL] 🔍 Metadata filter {query_param.metadata_filter} applied at KG stage: "
-            f"{_before_cnt} -> {len(use_text_units)} chunks matched"
-        )
-        if len(use_text_units):
-            _preview_ids = [unit.get("id", "")[:16] + "..." for unit in use_text_units[:3]]
-            print(f"🔍 Matched chunk ids (preview): {_preview_ids}")
-
-            # 先頭3件のメタデータ詳細を表示
-            print("🔎 Raw metadata (after KG filter):")
-            for unit in use_text_units[:3]:
-                _cid = unit.get("id", "")
-                _cid_disp = _cid[:16] + "..." if _cid else "N/A"
-                _raw_meta = unit.get("metadata")
-                _meta_dict = {}
-                if isinstance(_raw_meta, dict):
-                    _meta_dict = _raw_meta
-                elif isinstance(_raw_meta, str):
-                    try:
-                        _meta_dict = json.loads(_raw_meta)
-                    except Exception:
-                        _meta_dict = {}
-
-                _category = _meta_dict.get("category", "N/A")
-
-                _distance_val = unit.get("_distance", "N/A")
-                print(f"   - ID: {_cid_disp}")
-                print(f"     Raw metadata: {_raw_meta}")
-                print(f"     Extracted category: {_category}")
-                print(f"     Distance: {_distance_val}")
-                print(f"     Metadata type: {type(_raw_meta)}")
+    # フィルタリング後のチャンクに基づいてエンティティの情報を再構築する
+    filtered_chunk_content_map = {unit["id"]: unit["content"] for unit in use_text_units}
+    final_node_datas = []
+    for node in node_datas:
+        source_ids = split_string_by_multi_markers(node.get("source_id", ""), [GRAPH_FIELD_SEP])
+        relevant_content = [
+            filtered_chunk_content_map[sid] for sid in source_ids if sid in filtered_chunk_content_map
+        ]
+        
+        if relevant_content:
+            node["description"] = GRAPH_FIELD_SEP.join(relevant_content)
+            final_node_datas.append(node)
+    node_datas = final_node_datas
 
     use_relations = await _find_most_related_edges_from_entities(
         node_datas, query_param, knowledge_graph_inst
@@ -730,6 +712,25 @@ async def _find_most_related_text_unit_from_entities(
     )
 
     all_text_units = [t["data"] for t in all_text_units]
+
+    # 時間フィルタを適用
+    if query_param.start_time or query_param.end_time:
+        filtered_by_time = []
+        start_time_dt = datetime.fromisoformat(query_param.start_time) if query_param.start_time else None
+        end_time_dt = datetime.fromisoformat(query_param.end_time) if query_param.end_time else None
+
+        for unit in all_text_units:
+            unit_time = unit.get("updated_at")
+            if not unit_time:
+                continue
+
+            if start_time_dt and unit_time < start_time_dt:
+                continue
+            if end_time_dt and unit_time > end_time_dt:
+                continue
+            filtered_by_time.append(unit)
+        all_text_units = filtered_by_time
+
     return all_text_units
 
 
@@ -933,36 +934,32 @@ async def _build_global_query_context(
                 filtered_text_units.append(unit)
         use_text_units = filtered_text_units
 
-        print(
-            f"[GLOBAL] 🔍 Metadata filter {query_param.metadata_filter} applied at KG stage: "
-            f"{_before_cnt} -> {len(use_text_units)} chunks matched"
-        )
-        if len(use_text_units):
-            _preview_ids = [unit.get("id", "")[:16] + "..." for unit in use_text_units[:3]]
-            print(f"🔍 Matched chunk ids (preview): {_preview_ids}")
+    # フィルタリングされたチャンクに基づいて、エンティティとリレーションシップの情報を再構築する
+    filtered_chunk_content_map = {unit["id"]: unit["content"] for unit in use_text_units}
 
-            print("🔎 Raw metadata (after KG filter):")
-            for unit in use_text_units[:3]:
-                _cid = unit.get("id", "")
-                _cid_disp = _cid[:16] + "..." if _cid else "N/A"
-                _raw_meta = unit.get("metadata")
-                _meta_dict = {}
-                if isinstance(_raw_meta, dict):
-                    _meta_dict = _raw_meta
-                elif isinstance(_raw_meta, str):
-                    try:
-                        _meta_dict = json.loads(_raw_meta)
-                    except Exception:
-                        _meta_dict = {}
+    # エンティティをフィルタリングして説明を再構築
+    final_entities = []
+    for entity in use_entities:
+        source_ids = split_string_by_multi_markers(entity.get("source_id", ""), [GRAPH_FIELD_SEP])
+        relevant_content = [
+            filtered_chunk_content_map[sid] for sid in source_ids if sid in filtered_chunk_content_map
+        ]
+        if relevant_content:
+            entity["description"] = GRAPH_FIELD_SEP.join(relevant_content)
+            final_entities.append(entity)
+    use_entities = final_entities
 
-                _category = _meta_dict.get("category", "N/A")
-
-                _distance_val = unit.get("_distance", "N/A")
-                print(f"   - ID: {_cid_disp}")
-                print(f"     Raw metadata: {_raw_meta}")
-                print(f"     Extracted category: {_category}")
-                print(f"     Distance: {_distance_val}")
-                print(f"     Metadata type: {type(_raw_meta)}")
+    # リレーションシップをフィルタリングして説明を再構築
+    final_edge_datas = []
+    for edge in edge_datas:
+        source_ids = split_string_by_multi_markers(edge.get("source_id", ""), [GRAPH_FIELD_SEP])
+        relevant_content = [
+            filtered_chunk_content_map[sid] for sid in source_ids if sid in filtered_chunk_content_map
+        ]
+        if relevant_content:
+            edge["description"] = GRAPH_FIELD_SEP.join(relevant_content)
+            final_edge_datas.append(edge)
+    edge_datas = final_edge_datas
 
     logger.info(
         f"Global query uses {len(use_entities)} entites, {len(edge_datas)} relations, {len(use_text_units)} text units"
@@ -1085,6 +1082,24 @@ async def _find_related_text_unit_from_relationships(
         max_token_size=query_param.max_token_for_text_unit,
     )
     all_text_units: list[TextChunkSchema] = [t["data"] for t in all_text_units]
+
+    # 時間フィルタを適用
+    if query_param.start_time or query_param.end_time:
+        filtered_by_time = []
+        start_time_dt = datetime.fromisoformat(query_param.start_time) if query_param.start_time else None
+        end_time_dt = datetime.fromisoformat(query_param.end_time) if query_param.end_time else None
+
+        for unit in all_text_units:
+            unit_time = unit.get("updated_at")
+            if not unit_time:
+                continue
+            
+            if start_time_dt and unit_time < start_time_dt:
+                continue
+            if end_time_dt and unit_time > end_time_dt:
+                continue
+            filtered_by_time.append(unit)
+        all_text_units = filtered_by_time
 
     return all_text_units
 
@@ -1409,20 +1424,22 @@ async def path2chunk(
         v["Path"] = []
         if node_chunk_id is None:
             node_datas = await asyncio.gather(*[knowledge_graph_inst.get_node(k)])
+            count_dict = Counter()
             for dp in node_datas:
                 # ノードが存在しない場合はスキップ
                 if dp is None:
                     continue
                 text_units_node = split_string_by_multi_markers(
-                    dp["source_id"], [GRAPH_FIELD_SEP]
+                    dp.get("source_id", ""), [GRAPH_FIELD_SEP]
                 )
-                count_dict = Counter(text_units_node)
+                count_dict.update(text_units_node)
 
-            for id in count_dict.most_common(max_chunks):
-                v["Path"].append(id[0])
+            if count_dict:
+                for _id, _ in count_dict.most_common(max_chunks):
+                    v["Path"].append(_id)
             # v['Path'] = count_dict.most_common(max_chunks)#[]
         else:
-            for id in count_dict.most_common(max_chunks):
+            for id in node_chunk_id.most_common(max_chunks):
                 v["Path"].append(id[0])
             # v['Path'] = node_chunk_id.most_common(max_chunks)
     return scored_edged_reasoning_path

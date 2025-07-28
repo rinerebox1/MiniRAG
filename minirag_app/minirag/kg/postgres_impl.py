@@ -557,7 +557,7 @@ class PGVectorStorage(BaseVectorStorage):
                     except ValueError:
                         # パース失敗時はそのまま渡す (asyncpg が型変換を試みる)
                         pass
-            where_clauses.append(f"created_at >= ${param_idx}")
+            where_clauses.append(f"updated_at >= ${param_idx}")
             params.append(start_time)
             param_idx += 1
 
@@ -570,7 +570,7 @@ class PGVectorStorage(BaseVectorStorage):
                         end_time = datetime.strptime(end_time, "%Y-%m-%d %H:%M:%S")
                     except ValueError:
                         pass
-            where_clauses.append(f"created_at <= ${param_idx}")
+            where_clauses.append(f"updated_at <= ${param_idx}")
             params.append(end_time)
             param_idx += 1
 
@@ -1554,7 +1554,7 @@ TABLES = {
                     content_vector VECTOR,
                     metadata JSONB,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 	                CONSTRAINT LIGHTRAG_DOC_CHUNKS_PK PRIMARY KEY (workspace, id)
                     )"""
     },
@@ -1567,7 +1567,7 @@ TABLES = {
                     content_vector VECTOR,
                     metadata JSONB,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 	                CONSTRAINT LIGHTRAG_VDB_ENTITY_PK PRIMARY KEY (workspace, id)
                     )"""
     },
@@ -1581,7 +1581,7 @@ TABLES = {
                     content_vector VECTOR,
                     metadata JSONB,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 	                CONSTRAINT LIGHTRAG_VDB_RELATION_PK PRIMARY KEY (workspace, id)
                     )"""
     },
@@ -1593,7 +1593,7 @@ TABLES = {
                     original_prompt TEXT,
                     return_value TEXT,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 	                CONSTRAINT LIGHTRAG_LLM_CACHE_PK PRIMARY KEY (workspace, mode, id)
                     )"""
     },
@@ -1620,7 +1620,7 @@ SQL_TEMPLATES = {
                                 FROM LIGHTRAG_DOC_FULL WHERE workspace=$1 AND id=$2
                             """,
     "get_by_id_text_chunks": """SELECT id, tokens, COALESCE(content, '') as content,
-                                chunk_order_index, full_doc_id, metadata
+                                chunk_order_index, full_doc_id, metadata, created_at, updated_at
                                 FROM LIGHTRAG_DOC_CHUNKS WHERE workspace=$1 AND id=$2
                             """,
     "get_by_id_llm_response_cache": """SELECT id, original_prompt, COALESCE(return_value, '') as "return", mode
@@ -1633,7 +1633,7 @@ SQL_TEMPLATES = {
                                  FROM LIGHTRAG_DOC_FULL WHERE workspace=$1 AND id IN ({ids})
                             """,
     "get_by_ids_text_chunks": """SELECT id, tokens, COALESCE(content, '') as content,
-                                  chunk_order_index, full_doc_id, metadata
+                                  chunk_order_index, full_doc_id, metadata, created_at, updated_at
                                    FROM LIGHTRAG_DOC_CHUNKS WHERE workspace=$1 AND id IN ({ids})
                                 """,
     "get_by_ids_llm_response_cache": """SELECT id, original_prompt, COALESCE(return_value, '') as "return", mode
@@ -1687,25 +1687,25 @@ SQL_TEMPLATES = {
                      """,
     # SQL for VectorStorage
     "entities": """SELECT entity_name, distance, id, content FROM
-        (SELECT workspace, id, entity_name, content, metadata, created_at,
+        (SELECT workspace, id, entity_name, content, metadata, created_at, updated_at,
                 1 - (content_vector <=> '[{embedding_string}]'::vector) as distance
          FROM LIGHTRAG_VDB_ENTITY) AS subquery
         WHERE {where_clause}
        """,
     "entities_name": """SELECT entity_name, distance, id, content FROM
-        (SELECT workspace, id, entity_name, content, metadata, created_at,
+        (SELECT workspace, id, entity_name, content, metadata, created_at, updated_at,
                 1 - (content_vector <=> '[{embedding_string}]'::vector) as distance
          FROM LIGHTRAG_VDB_ENTITY) AS subquery
         WHERE {where_clause}
        """,
     "relationships": """SELECT source_id AS src_id, target_id AS tgt_id, content, distance FROM
-        (SELECT workspace, id, source_id, target_id, content, metadata, created_at,
+        (SELECT workspace, id, source_id, target_id, content, metadata, created_at, updated_at,
                 1 - (content_vector <=> '[{embedding_string}]'::vector) as distance
          FROM LIGHTRAG_VDB_RELATION) AS subquery
         WHERE {where_clause}
        """,
     "chunks": """SELECT id, content, distance FROM
-        (SELECT workspace, id, content, metadata, created_at,
+        (SELECT workspace, id, content, metadata, created_at, updated_at,
                 1 - (content_vector <=> '[{embedding_string}]'::vector) as distance
          FROM LIGHTRAG_DOC_CHUNKS) AS subquery
         WHERE {where_clause}
