@@ -1,0 +1,2 @@
+- 使用するブランチ: refactor-insertion-pipeline
+  - feature/jules-integration2 をリファクタリングして綺麗にしたもの
