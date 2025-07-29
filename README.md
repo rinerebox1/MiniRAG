@@ -1,13 +1,8 @@
-Julesにリファクタリングしてもらったブランチ。
-正常に動いているように見えるけど、
-debug=Flaseで
-🔎 Raw metadata and distance values:
-が出るようになったので、ここだけおかしいかも。
-
-
-
-
 # 使い方
+
+- 使用するブランチ: refactor-insertion-pipeline
+  - feature/jules-integration2 をリファクタリングして綺麗にしたもの
+
 
 chmod +x scripts/build.sh
 chmod +x scripts/start.sh
