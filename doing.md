@@ -297,6 +297,10 @@ param1 = QueryParam(mode="light",
 answer1, source1 = await rag_with_filter.aquery(query1, param=param1)
 ```
 
+- documents/ainsert_structured_input_design.md
+
+
+
 ## アップデート案
 
 指定したtext_fieldsを単純に結合した文字列として1ドキュメント化しているため、title カラムと description カラムを別々に登録する案。こうすることで、若干精度が上がる気がする。
