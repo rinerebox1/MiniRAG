@@ -3,7 +3,7 @@ import os
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from functools import partial
-from typing import Type, cast, Any
+from typing import Type, cast, Any, Iterable, Optional, Sequence
 from dotenv import load_dotenv
 
 
@@ -72,6 +72,14 @@ STORAGES = {
 # )
 
 load_dotenv(dotenv_path=".env", override=False)
+
+
+@dataclass
+class _InsertPayload:
+    documents: list[str]
+    ids: Optional[list[str]]
+    metadatas: Optional[list[dict[str, Any]]]
+    structured_records: list[dict[str, Any]]
 
 
 def lazy_external_import(module_name: str, class_name: str):
@@ -344,31 +352,312 @@ class MiniRAG:
 
     async def ainsert(
         self,
-        input: str | list[str],
+        input: str | dict | list[str] | list[dict],
         split_by_character: str | None = None,
         split_by_character_only: bool = False,
         ids: str | list[str] | None = None,
-        metadatas: list[dict] | None = None,
+        metadatas: dict | list[dict] | None = None,
         overwrite: bool = False,
+        schema: dict | None = None,
+        text_fields: Sequence[str] | None = None,
     ) -> None:
-        print(f"🚀 AINSERT called with overwrite={overwrite}")
-        print(f"📥 Input: {len(input) if isinstance(input, list) else 1} documents")
-        print(f"📥 IDs: {ids}")
-        print(f"📥 Metadatas: {metadatas}")
-        
-        if isinstance(input, str):
-            input = [input]
-        if isinstance(ids, str):
-            ids = [ids]
-        if isinstance(metadatas, dict):
-            metadatas = [metadatas]
+        payload = self._prepare_insert_payload(
+            input=input,
+            ids=ids,
+            metadatas=metadatas,
+            schema=schema,
+            text_fields=text_fields,
+        )
 
-        await self.apipeline_enqueue_documents(input, ids, metadatas, overwrite)
+        print(f"🚀 AINSERT called with overwrite={overwrite}")
+        print(f"📥 Input: {len(payload.documents)} documents")
+        print(f"📥 IDs: {payload.ids}")
+        print(f"📥 Metadatas: {payload.metadatas}")
+
+        await self.apipeline_enqueue_documents(
+            payload.documents,
+            payload.ids,
+            payload.metadatas,
+            overwrite,
+        )
         await self.apipeline_process_enqueue_documents(
             split_by_character, split_by_character_only
         )
- 
+
+        if payload.structured_records and schema and self._is_postgres_backend():
+            await self._write_structured_records_to_pg(
+                payload.structured_records,
+                schema,
+            )
+
         await self._insert_done()
+
+    def _prepare_insert_payload(
+        self,
+        input: str | dict | list[str] | list[dict],
+        ids: str | list[str] | None,
+        metadatas: dict | list[dict] | None,
+        schema: dict | None,
+        text_fields: Sequence[str] | None,
+    ):
+        is_structured_input = self._looks_like_structured_records(input)
+
+        if not is_structured_input:
+            documents = self._ensure_string_list(input)
+            ids_list = self._normalize_ids_argument(ids, len(documents))
+            metadata_list = self._normalize_metadata_argument(metadatas, len(documents))
+            if metadata_list and ids_list is None:
+                raise ValueError(
+                    "Explicit IDs are required when providing metadatas"
+                )
+            return _InsertPayload(
+                documents=documents,
+                ids=ids_list,
+                metadatas=metadata_list,
+                structured_records=[],
+            )
+
+        records = self._ensure_record_list(input)
+        schema = schema or {}
+        id_column = schema.get("id_column", "doc_id")
+        field_specs = schema.get("fields", {})
+
+        override_ids = self._normalize_ids_argument(ids, len(records))
+        override_metadatas = self._normalize_metadata_argument(
+            metadatas,
+            len(records),
+        )
+
+        documents: list[str] = []
+        resolved_ids: list[str] = []
+        metadata_list: list[dict[str, Any]] = []
+        structured_records: list[dict[str, Any]] = []
+
+        for idx, record in enumerate(records):
+            record_copy = dict(record)
+            record_metadata = record_copy.pop("metadata", {}) or {}
+
+            structured_values = self._apply_schema_to_record(
+                record_copy,
+                field_specs,
+                id_column,
+            )
+
+            text_segments = self._collect_text_segments(
+                record_copy,
+                structured_values,
+                text_fields,
+                field_specs,
+            )
+            if not text_segments:
+                raise ValueError(
+                    "No text fields found for structured record insertion"
+                )
+
+            doc_text = "\n".join(segment for segment in text_segments if segment).strip()
+            documents.append(doc_text)
+
+            candidate_id = structured_values.get(id_column) or record_copy.get(id_column)
+            if candidate_id is None:
+                candidate_id = compute_mdhash_id(doc_text, prefix="doc-")
+            resolved_ids.append(str(candidate_id))
+
+            merged_metadata: dict[str, Any] = {}
+            merged_metadata.update(record_metadata)
+            for field_name, value in structured_values.items():
+                if field_name == id_column:
+                    continue
+                merged_metadata[field_name] = value
+
+            if override_metadatas and override_metadatas[idx]:
+                merged_metadata.update(override_metadatas[idx])
+
+            metadata_list.append(merged_metadata)
+
+            structured_record = {
+                field_name: structured_values.get(field_name)
+                for field_name in field_specs.keys()
+            }
+            if id_column not in structured_record:
+                structured_record[id_column] = candidate_id
+            structured_records.append(structured_record)
+
+        ids_list = override_ids or resolved_ids
+        return _InsertPayload(
+            documents=documents,
+            ids=ids_list,
+            metadatas=metadata_list,
+            structured_records=structured_records,
+        )
+
+    @staticmethod
+    def _looks_like_structured_records(input_data: Any) -> bool:
+        if isinstance(input_data, dict):
+            return True
+        if isinstance(input_data, list) and input_data:
+            return all(isinstance(item, dict) for item in input_data)
+        return False
+
+    @staticmethod
+    def _ensure_string_list(input_data: str | list[str]) -> list[str]:
+        if isinstance(input_data, str):
+            return [input_data]
+        return list(input_data)
+
+    @staticmethod
+    def _ensure_record_list(
+        input_data: dict | list[dict],
+    ) -> list[dict[str, Any]]:
+        if isinstance(input_data, dict):
+            return [dict(input_data)]
+        return [dict(record) for record in input_data]
+
+    @staticmethod
+    def _normalize_ids_argument(
+        ids: str | list[str] | None,
+        expected_length: int,
+    ) -> Optional[list[str]]:
+        if ids is None:
+            return None
+        if isinstance(ids, str):
+            if expected_length != 1:
+                raise ValueError("Number of IDs must match the number of documents")
+            return [ids]
+        if len(ids) != expected_length:
+            raise ValueError("Number of IDs must match the number of documents")
+        return [str(doc_id) for doc_id in ids]
+
+    @staticmethod
+    def _normalize_metadata_argument(
+        metadatas: dict | list[dict] | None,
+        expected_length: int,
+    ) -> Optional[list[dict[str, Any]]]:
+        if metadatas is None:
+            return None
+        if isinstance(metadatas, dict):
+            return [dict(metadatas) for _ in range(expected_length)]
+        if len(metadatas) != expected_length:
+            raise ValueError(
+                "Number of metadatas must match the number of documents"
+            )
+        return [dict(metadata or {}) for metadata in metadatas]
+
+    def _apply_schema_to_record(
+        self,
+        record: dict[str, Any],
+        field_specs: dict[str, dict],
+        id_column: str,
+    ) -> dict[str, Any]:
+        if not field_specs:
+            return dict(record)
+
+        structured: dict[str, Any] = {}
+        for field_name, spec in field_specs.items():
+            value = record.get(field_name)
+            if value is None:
+                if spec.get("nullable", True) is False:
+                    raise ValueError(
+                        f"Field '{field_name}' is not nullable but value is None"
+                    )
+                structured[field_name] = None
+                continue
+            structured[field_name] = self._coerce_field_value(value, spec)
+        return structured
+
+    def _collect_text_segments(
+        self,
+        record: dict[str, Any],
+        structured_values: dict[str, Any],
+        text_fields: Sequence[str] | None,
+        field_specs: dict[str, dict],
+    ) -> list[str]:
+        if text_fields:
+            candidates = list(text_fields)
+        elif field_specs:
+            candidates = [
+                field
+                for field, spec in field_specs.items()
+                if spec.get("type", "").lower() in {"text", "varchar", "character varying"}
+            ]
+        else:
+            candidates = [
+                field
+                for field, value in record.items()
+                if isinstance(value, str)
+            ]
+
+        text_segments: list[str] = []
+        for field in candidates:
+            value = record.get(field, structured_values.get(field))
+            if value is None:
+                continue
+            if isinstance(value, list):
+                text_segments.extend(str(item) for item in value if item is not None)
+            else:
+                text_segments.append(str(value))
+        return text_segments
+
+    @staticmethod
+    def _coerce_field_value(value: Any, spec: dict[str, Any]) -> Any:
+        field_type = (spec.get("type") or "").lower()
+        if field_type in {"text", "varchar", "character varying"}:
+            if isinstance(value, list):
+                return "\n".join(str(item) for item in value if item is not None)
+            return str(value)
+        if field_type in {"integer", "int", "int4", "bigint", "smallint"}:
+            return None if value is None else int(value)
+        if field_type in {"float", "double", "double precision", "real"}:
+            return None if value is None else float(value)
+        if field_type in {"numeric", "decimal"}:
+            return None if value is None else float(value)
+        if field_type in {"boolean", "bool"}:
+            return None if value is None else bool(value)
+        # timestampや日付などは呼び出し元で正しい型に変換すると仮定
+        return value
+
+    def _is_postgres_backend(self) -> bool:
+        return self.doc_status_storage == "PGDocStatusStorage"
+
+    async def _write_structured_records_to_pg(
+        self,
+        records: Iterable[dict[str, Any]],
+        schema: dict,
+    ) -> None:
+        table_name = schema.get("table")
+        if not table_name:
+            raise ValueError("`schema['table']` is required for structured inserts")
+
+        field_specs = schema.get("fields")
+        if not field_specs:
+            raise ValueError("`schema['fields']` must define target columns")
+
+        db_client = getattr(self.doc_status, "db", None)
+        if db_client is None:
+            logger.warning("PostgreSQL client is not configured; skipping structured insert")
+            return
+
+        columns = list(field_specs.keys())
+        placeholders = ", ".join(f"${idx + 1}" for idx in range(len(columns)))
+
+        conflict_columns = schema.get("conflict_columns")
+        upsert_clause = ""
+        if conflict_columns:
+            conflict_list = ", ".join(conflict_columns)
+            update_columns = [col for col in columns if col not in conflict_columns]
+            set_clause = ", ".join(
+                f"{col} = EXCLUDED.{col}"
+                for col in update_columns
+            )
+            upsert_clause = f" ON CONFLICT ({conflict_list}) DO UPDATE SET {set_clause}" if set_clause else " ON CONFLICT ({conflict_list}) DO NOTHING"
+
+        insert_sql = (
+            f"INSERT INTO {table_name} ({', '.join(columns)}) "
+            f"VALUES ({placeholders}){upsert_clause}"
+        )
+
+        for record in records:
+            params = {column: record.get(column) for column in columns}
+            await db_client.execute(insert_sql, params)
 
     async def apipeline_enqueue_documents(
         self,
