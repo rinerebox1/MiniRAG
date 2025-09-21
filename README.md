@@ -1,4 +1,5 @@
-# タスク
+# to do
+
 使用するブランチ: feature/ainsert-structured-input
 で「doing.md」の 9/21 のやつを実装したのでテストしたい。
 text以外にも登録できるように拡張した。詳細は「doing.md」の 9/21 参照。
