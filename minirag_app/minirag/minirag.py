@@ -146,6 +146,13 @@ class MiniRAG:
     chunk_token_size: int = 1200
     chunk_overlap_token_size: int = 100
     tiktoken_model_name: str = "gpt-4o-mini"
+    
+    # 🆕 multi-field search settings
+    enable_field_splitting: bool = True  # フィールド分割の有効化
+    generate_combined_chunk: bool = True  # 統合版チャンク(_all)の生成
+    text_field_keys: list[str] = field(
+        default_factory=lambda: ["title", "description", "summary", "content", "body", "text"]
+    )  # 自動的にテキストフィールドとして扱うキー
 
     # entity extraction
     entity_extract_max_gleaning: int = 1
@@ -471,6 +478,10 @@ class MiniRAG:
 
             if override_metadatas and override_metadatas[idx]:
                 merged_metadata.update(override_metadatas[idx])
+            
+            # 🆕 フィールド分割用に元のレコードを保存
+            if self.enable_field_splitting:
+                merged_metadata["_original_data"] = record
 
             metadata_list.append(merged_metadata)
 
@@ -798,6 +809,109 @@ class MiniRAG:
             # For now, we log the error and proceed, which was the previous behavior.
             logger.warning("Proceeding with upsert despite cascade delete failure.")
 
+    def _extract_text_fields(self, data: dict) -> tuple[dict[str, str], dict]:
+        """
+        dictからテキストフィールドとメタデータを分離
+        
+        Args:
+            data: 入力データ（例: {"doc_id": "...", "title": "...", "description": [...], "metadata": {...}}）
+        
+        Returns:
+            text_fields: テキストフィールドの辞書（例: {"title": "...", "description": "..."}）
+            metadata: その他のフィールド（数値など）とmetadataをマージしたもの
+        """
+        text_fields = {}
+        metadata = data.get("metadata", {}).copy()
+        
+        for key, value in data.items():
+            # doc_id と metadata はスキップ
+            if key in ["doc_id", "metadata"]:
+                continue
+            
+            # text_field_keys に含まれる、またはstr/listの値はテキストフィールドとして扱う
+            if key in self.text_field_keys or isinstance(value, (str, list)):
+                # リストの場合は改行で結合
+                if isinstance(value, list):
+                    text_fields[key] = "\n".join(str(v) for v in value if v)
+                else:
+                    text_fields[key] = str(value)
+            else:
+                # 数値などはmetadataへ
+                metadata[key] = value
+        
+        return text_fields, metadata
+    
+    def _generate_chunks_per_field(
+        self,
+        doc_id: str,
+        text_fields: dict[str, str],
+        base_metadata: dict
+    ) -> dict[str, dict]:
+        """
+        フィールドごとにチャンクを生成
+        
+        Args:
+            doc_id: ドキュメントID
+            text_fields: テキストフィールドの辞書（例: {"title": "...", "description": "..."}）
+            base_metadata: ベースとなるメタデータ
+        
+        Returns:
+            全チャンクの辞書（chunk_id -> chunk_data）
+        """
+        all_chunks = {}
+        
+        # フィールドごとのチャンク生成
+        for field_name, field_content in text_fields.items():
+            if not field_content or not field_content.strip():
+                continue
+                
+            field_chunks = self.chunking_func(
+                field_content,
+                self.chunk_overlap_token_size,
+                self.chunk_token_size,
+                self.tiktoken_model_name
+            )
+            
+            for chunk in field_chunks:
+                chunk_id = compute_mdhash_id(
+                    chunk["content"] + field_name + doc_id,
+                    prefix=f"chunk-{field_name}-"
+                )
+                all_chunks[chunk_id] = {
+                    **chunk,
+                    "full_doc_id": doc_id,
+                    "metadata": {
+                        **base_metadata,
+                        "text_field": field_name  # 🆕 フィールド識別子
+                    }
+                }
+        
+        # 統合版チャンク生成（デフォルト検索用）
+        if self.generate_combined_chunk:
+            combined_content = "\n".join(text_fields.values())
+            combined_chunks = self.chunking_func(
+                combined_content,
+                self.chunk_overlap_token_size,
+                self.chunk_token_size,
+                self.tiktoken_model_name
+            )
+            
+            for chunk in combined_chunks:
+                chunk_id = compute_mdhash_id(
+                    chunk["content"] + "_all" + doc_id,
+                    prefix="chunk-all-"
+                )
+                all_chunks[chunk_id] = {
+                    **chunk,
+                    "full_doc_id": doc_id,
+                    "metadata": {
+                        **base_metadata,
+                        "text_field": "_all"  # 🆕 統合版マーカー
+                    }
+                }
+        
+        return all_chunks
+
     async def apipeline_process_enqueue_documents(
         self,
         split_by_character: str | None = None,
@@ -832,24 +946,55 @@ class MiniRAG:
         for batch_idx, docs_batch in enumerate(docs_batches):
             for doc_id, status_doc in docs_batch:
                 print(f"⚙️  Processing doc '{doc_id}', status_doc.metadata = {status_doc.metadata}")
-                chunks = {
-                    compute_mdhash_id(dp["content"], prefix="chunk-"): {
-                        **dp,
-                        "full_doc_id": doc_id,
-                        "metadata": status_doc.metadata or {},
+                
+                # 🆕 フィールド分割が有効な場合はフィールドごとにチャンクを生成
+                if self.enable_field_splitting and hasattr(status_doc, 'metadata') and status_doc.metadata:
+                    # status_doc.content を解析してフィールド分割できるか試みる
+                    # メタデータに元の構造化データがある場合を想定
+                    original_data = status_doc.metadata.get("_original_data")
+                    
+                    if original_data and isinstance(original_data, dict):
+                        # 構造化データからフィールド分割
+                        text_fields, merged_metadata = self._extract_text_fields(original_data)
+                        chunks = self._generate_chunks_per_field(doc_id, text_fields, merged_metadata)
+                        print(f"📦 Created {len(chunks)} field-split chunks for doc '{doc_id}' (fields: {list(text_fields.keys())})")
+                    else:
+                        # 通常のチャンク生成（後方互換性）
+                        chunks = {
+                            compute_mdhash_id(dp["content"], prefix="chunk-"): {
+                                **dp,
+                                "full_doc_id": doc_id,
+                                "metadata": {**(status_doc.metadata or {}), "text_field": "_all"},  # 🆕 _all マーカー
+                            }
+                            for dp in self.chunking_func(
+                                status_doc.content,
+                                self.chunk_overlap_token_size,
+                                self.chunk_token_size,
+                                self.tiktoken_model_name,
+                            )
+                        }
+                        print(f"📦 Created {len(chunks)} standard chunks for doc '{doc_id}'")
+                else:
+                    # フィールド分割無効時は通常のチャンク生成
+                    chunks = {
+                        compute_mdhash_id(dp["content"], prefix="chunk-"): {
+                            **dp,
+                            "full_doc_id": doc_id,
+                            "metadata": {**(status_doc.metadata or {}), "text_field": "_all"},  # 🆕 _all マーカー
+                        }
+                        for dp in self.chunking_func(
+                            status_doc.content,
+                            self.chunk_overlap_token_size,
+                            self.chunk_token_size,
+                            self.tiktoken_model_name,
+                        )
                     }
-                    for dp in self.chunking_func(
-                        status_doc.content,
-                        self.chunk_overlap_token_size,
-                        self.chunk_token_size,
-                        self.tiktoken_model_name,
-                    )
-                }
-                print(f"📦 Created {len(chunks)} chunks for doc '{doc_id}'")
+                    print(f"📦 Created {len(chunks)} standard chunks for doc '{doc_id}'")
                 
                 # 各チャンクのメタデータを確認
                 for chunk_id, chunk_data in list(chunks.items())[:2]:  # 最初の2つだけ表示
-                    print(f"   └─ Chunk '{chunk_id[:16]}...' metadata: {chunk_data.get('metadata', {})}")
+                    text_field = chunk_data.get('metadata', {}).get('text_field', 'N/A')
+                    print(f"   └─ Chunk '{chunk_id[:16]}...' text_field: {text_field}, metadata: {chunk_data.get('metadata', {})}")
                 await asyncio.gather(
                     self.chunks_vdb.upsert(chunks),
                     self.full_docs.upsert(
@@ -901,11 +1046,47 @@ class MiniRAG:
             tasks.append(cast(StorageNameSpace, storage_inst).index_done_callback())
         await asyncio.gather(*tasks)
 
+    def _apply_target_fields_filter(self, param: QueryParam) -> QueryParam:
+        """
+        target_fields を metadata_filter に変換
+        
+        Args:
+            param: 元の QueryParam
+        
+        Returns:
+            変換された QueryParam
+        """
+        field_filter = {}
+        
+        if param.target_fields is None:
+            # デフォルト: 統合検索
+            field_filter = {"text_field": "_all"}
+        elif len(param.target_fields) == 1:
+            # 単一フィールド検索
+            field_filter = {"text_field": param.target_fields[0]}
+        else:
+            # 複数フィールド検索（リストとして渡す → postgres_impl.py で IN 句に変換）
+            field_filter = {"text_field": param.target_fields}
+        
+        # 既存のmetadata_filterとマージ
+        if param.metadata_filter:
+            merged_filter = {**param.metadata_filter, **field_filter}
+        else:
+            merged_filter = field_filter
+        
+        # 新しいQueryParamを作成（datac copyを使ってimmutableに）
+        from dataclasses import replace
+        return replace(param, metadata_filter=merged_filter)
+    
     def query(self, query: str, param: QueryParam = QueryParam()):
         loop = always_get_an_event_loop()
         return loop.run_until_complete(self.aquery(query, param))
 
     async def aquery(self, query: str, param: QueryParam = QueryParam()):
+        # 🆕 target_fields を metadata_filter に変換
+        if param.target_fields is not None:
+            param = self._apply_target_fields_filter(param)
+        
         if param.mode == "light":
             response, source = await hybrid_query(
                 query,

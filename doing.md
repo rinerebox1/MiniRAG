@@ -307,6 +307,8 @@ answer1, source1 = await rag_with_filter.aquery(query1, param=param1)
 
 ### どのように拡張するか（概要）
 
+以下は対応した(2025/10/04)
+
   1. チャンク化時にカラム情報を保持する
       - 例えば text_fields=["title", "description"] の場合、現在は「注文1\n長
   文A\n長文B」のように結合しています。

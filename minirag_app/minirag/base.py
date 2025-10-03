@@ -46,6 +46,12 @@ class QueryParam:
     metadata_filter: Optional[dict] = None
     start_time: Optional[str] = None
     end_time: Optional[str] = None
+    
+    # 🆕 Multi-field search: 検索対象フィールドの指定
+    target_fields: Optional[list[str]] = None  
+    # None: デフォルト（統合検索、text_field="_all"）
+    # ["title"]: titleフィールドのみ検索
+    # ["title", "description"]: 複数フィールド検索
 
 
 @dataclass

@@ -547,22 +547,37 @@ class PGVectorStorage(BaseVectorStorage):
             for key, value in metadata_filter.items():
                 # メタデータの型に応じて適切なアクセス方法を選択
                 # JSONB object型の場合は直接アクセス、string型の場合は変換が必要
-                if isinstance(value, (int, float)):
+                
+                # 🆕 リスト値の場合は IN 句を生成（複数フィールド検索用）
+                if isinstance(value, list):
+                    placeholders = ",".join([f"${param_idx + i}" for i in range(len(value))])
+                    where_clauses.append(f"""metadata IS NOT NULL AND (
+                        (jsonb_typeof(metadata) = 'object' AND metadata->>'{key}' IN ({placeholders})) OR
+                        (jsonb_typeof(metadata) = 'string' AND (metadata::text)::jsonb->>'{key}' IN ({placeholders}))
+                    )""")
+                    params.extend([str(v) for v in value])
+                    param_idx += len(value)
+                    if debug:
+                        print(f"🔧 Flexible metadata filter (IN): {key} IN {value} (handles both object and string types)")
+                elif isinstance(value, (int, float)):
                     # 両方のケースに対応（object型とstring型）
                     where_clauses.append(f"""metadata IS NOT NULL AND (
                         (jsonb_typeof(metadata) = 'object' AND (metadata->>'{key}')::numeric = ${param_idx}) OR
                         (jsonb_typeof(metadata) = 'string' AND ((metadata::text)::jsonb->>'{key}')::numeric = ${param_idx})
                     )""")
                     params.append(value)
+                    param_idx += 1
+                    if debug:
+                        print(f"🔧 Flexible metadata filter: {key} = {str(value)} (handles both object and string types)")
                 else:
                     where_clauses.append(f"""metadata IS NOT NULL AND (
                         (jsonb_typeof(metadata) = 'object' AND metadata->>'{key}' = ${param_idx}) OR
                         (jsonb_typeof(metadata) = 'string' AND (metadata::text)::jsonb->>'{key}' = ${param_idx})
                     )""")
                     params.append(str(value))
-                param_idx += 1
-                if debug:
-                    print(f"🔧 Flexible metadata filter: {key} = {str(value)} (handles both object and string types)")
+                    param_idx += 1
+                    if debug:
+                        print(f"🔧 Flexible metadata filter: {key} = {str(value)} (handles both object and string types)")
         
         if start_time:
             # 文字列なら datetime にパース
