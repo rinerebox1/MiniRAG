@@ -3,6 +3,7 @@
 使用するブランチ: feature/ainsert-structured-input
 で「doing.md」の 9/21 のやつを実装したのでテストしたい。
 text以外にも登録できるように拡張した。詳細は「doing.md」の 9/21 参照。
+複数のテキストフィールドを対象に検索できるようにした(2025/10/04)。
 次のステップ候補
 - 「minirag_app/tests/test_ainsert_structured.py」を参考にしつつ、テーブル定義を`postgres/sql/migrations/001_init_schema.sql`に追加し、実際のPG環境で挿入動作を通しで検証する。
 
