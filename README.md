@@ -1,11 +1,43 @@
-# to do
+# CodexCLI によるレポート
 
-使用するブランチ: feature/ainsert-structured-input
+- 使用するブランチ: feature/ainsert-structured-input
+
+--- CodexCLI report - 2025/10/12 ---
+コードの更新、新しいテスト、依存関係のインストール、`uv.lock`の存在、およびテスト結果を網羅した明確なサマリーにすべての変更をまとめています。主要なファイルの変更点を強調し、作成されたSOW（作業範囲記述書）に言及し、テストにおけるdatetime処理のためのパッチ適用について触れ、テスト実行の手順を提供するとともに、考えられる次のステップを提案します。
+
+─ 作業時間: 33分22秒 ──
+
+• 新しいマルチフィールドワークフローのために永続的なPostgresターゲットを追加し、ライトクエリパスがフィールドターゲティングとメタデータフィルターの両方を正しく処理することを確認しました。
+
+  - `postgres/sql/migrations/001_init_schema.sql`: 構造化されたデータをPostgresに挿入できるよう、`workspace`、`doc_id`、および専用の`title`、`summary`、`body`テキストカラム、さらに関連フィールドとインデックスを持つ`public.customer_orders`テーブルを追加しました。
+  - `minirag_app/tests/test_postgres_multi_field_search.py`: 新しい非同期統合テストで、Docker化されたPostgresを起動し、`MiniRAG.ainsert`経由で構造化レコードを挿入、行が永続化されることを確認します。さらに、`target_fields=["summary"]`と`metadata_filter={"region": "APAC"}`を指定した`QueryParam`検索が期待されるチャンクを返すことをアサートします。フィクスチャは重いコンポーネントをスタブ化し、datetimeをシリアライズするために`_jsonb`にパッチを適用し、マルチフィールド検索ガイドに従ってドキュメントステータスのメタデータが辞書にパースバックされるようにします。
+  - `temp/multi-text-pg-validation.sow.md`: このタスクに関して合意されたSOW（作業範囲記述書）を記録しました。
+  - `uv.lock`: テストの依存関係（pytest, pytest-asyncio, asyncpg, python-dotenv, tiktoken, nltk, rouge, sentence-transformers, pipmaster, asyncpg, tenacityなど）を導入する際に`uv pip install`によって作成されました。リポジトリのポリシーに応じて保持または削除してください。
+
+  テスト実行コマンド: `UV_NO_SYNC=1 PYTHONPATH=. uv run --link-mode=copy pytest minirag_app/tests/test_postgres_multi_field_search.py -q`
+
+  他の環境にこのマイグレーションを適用したり、新しいPythonの依存関係をプロジェクトのメタデータに固定したりするのでなければ、これ以上の対応は必要ありません。
+
+↓
+要約:
+- 新しく「タイトルだけ」「要約だけ」といった特定のフィールドに絞って検索できる機能を追加したので、そのテストをした。
+- データベースの準備: この機能を実現するために、データを整理して保存する新しいデータベース（PostgreSQL）のテーブルを用意しました。
+-  「region（地域）がAPACの文書」といった条件で絞り込んだ上で、さらに「summary（要約）フィールドだけを検索する」というような、複合的な検索ができるようにした。
+- 上記について、期待通りの正しい結果が返ってくることを確認しました。
+- その他に、uv.lockファイル と テスト計画書として SOW を作成した。
+- 、「新しい多フィールド検索機能の開発とテストは完了しており、問題なく動作します。次のステップとして、この変更を本番環境などにも適用するか、また今回追加したツールを正式にプロジェクトに加えるかどうかを判断してください」
+
+# done
+
+- 使用するブランチ: feature/ainsert-structured-input
 で「doing.md」の 9/21 のやつを実装したのでテストしたい。
 text以外にも登録できるように拡張した。詳細は「doing.md」の 9/21 参照。
-複数のテキストフィールドを対象に検索できるようにした(2025/10/04)。
-次のステップ候補
-- 「minirag_app/tests/test_ainsert_structured.py」を参考にしつつ、テーブル定義を`postgres/sql/migrations/001_init_schema.sql`に追加し、実際のPG環境で挿入動作を通しで検証する。
+
+- 複数のテキストフィールドを対象に検索できるようにした(2025/10/04)。
+- IMPLEMENTATION_SUMMARY.md
+- MULTI_FIELD_SEARCH_GUIDE.md
+- 次のステップ候補
+  - 「minirag_app/tests/test_ainsert_structured.py」を参考にしつつ、テーブル定義を`postgres/sql/migrations/001_init_schema.sql`に追加し、実際のPG環境で挿入動作を通しで検証する。
 
 
 # 使い方

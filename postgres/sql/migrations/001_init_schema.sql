@@ -42,3 +42,23 @@ SELECT CASE WHEN upper(:'INDEX_TYPE') = 'IVFFLAT' THEN 'on' ELSE 'off' END AS is
 -- vector_cosine_ops: ベクトルのコサイン類似度用の演算子クラス
 -- lists=100: IVFFlatインデックスのリスト数（適宜チューニング可能）
 -- m=16, ef_construction=64: HNSWインデックスのパラメータ（適宜チューニング可能）
+
+-- ------------------------------------------------------------
+-- 構造化ドキュメント格納用テーブル（複数テキストフィールドに対応）
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS public.customer_orders (
+    workspace TEXT NOT NULL,
+    doc_id TEXT NOT NULL,
+    title TEXT,
+    summary TEXT,
+    body TEXT,
+    status TEXT,
+    region TEXT,
+    priority INTEGER,
+    created_at TIMESTAMPTZ,
+    PRIMARY KEY (workspace, doc_id),
+    CHECK (priority IS NULL OR priority >= 0)
+);
+
+CREATE INDEX IF NOT EXISTS idx_customer_orders_workspace_created_at
+    ON public.customer_orders (workspace, created_at DESC);
