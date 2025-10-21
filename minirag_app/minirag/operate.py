@@ -1630,6 +1630,33 @@ async def _build_mini_query_context(
 {text_units_context}
 ```
 """
+    # When provenance is requested, return structured entities/chunks along with the context
+    if query_param.include_provenance:
+        entities_used = [
+            {
+                "entity_name": n.get("entity_name"),
+                "score": n.get("Score"),
+                "description": n.get("description", ""),
+            }
+            for n in node_datas
+        ]
+
+        chunks_used = []
+        for cid, t in zip(final_chunk_id, use_text_units):
+            if t is None:
+                continue
+            chunks_used.append(
+                {
+                    "chunk_id": cid,
+                    "full_doc_id": t.get("full_doc_id"),
+                    "chunk_order_index": t.get("chunk_order_index"),
+                    "tokens": t.get("tokens"),
+                    "content": t.get("content"),
+                }
+            )
+
+        return {"context": response_context, "provenance": {"entities": entities_used, "chunks": chunks_used}}, source
+
     return response_context, source
 
 
@@ -1703,18 +1730,28 @@ async def minirag_query(  # MiniRAG
         query_param,
     )
 
+    # Unpack provenance-aware context if requested
+    provenance = None
+    context_str = context
+    if isinstance(context, dict) and "context" in context:
+        provenance = context.get("provenance")
+        context_str = context.get("context")
+
     if query_param.only_need_context:
-        return context, source
-    if context is None:
+        if query_param.include_provenance:
+            return {"context": context_str, "provenance": provenance}, source
+        return context_str, source
+    if context_str is None:
         return PROMPTS["fail_response"], []
 
     sys_prompt_temp = PROMPTS["rag_response"]
     sys_prompt = sys_prompt_temp.format(
-        context_data=context, response_type=query_param.response_type
+        context_data=context_str, response_type=query_param.response_type
     )
     response = await use_model_func(
         query,
         system_prompt=sys_prompt,
     )
-
+    if query_param.include_provenance:
+        return {"answer": response, "provenance": provenance}, source
     return response, source

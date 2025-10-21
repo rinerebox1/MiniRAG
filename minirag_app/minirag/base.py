@@ -19,6 +19,8 @@ class QueryParam:
     mode: Literal["light", "naive", "mini"] = "mini"
     only_need_context: bool = False
     only_need_prompt: bool = False
+    # When True, return structured provenance (entities/chunks) along with the answer or context
+    include_provenance: bool = False
     response_type: str = "Multiple Paragraphs"
     stream: bool = False
     # Number of top-k items to retrieve; corresponds to entities in "local" mode and relationships in "global" mode.
