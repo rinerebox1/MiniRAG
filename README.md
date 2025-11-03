@@ -55,10 +55,10 @@ chmod +x scripts/stop.sh
 
 
 - ビルド: scripts/build.sh
-- ソースコードの反映をする(基本はこれ): sudo scripts/start.sh cleanup
+- ソースコードの反映をする(基本はこれ): `sudo scripts/start.sh cleanup`
   - やり直すならデータベースをクリーンアップした方が良く、そのためには sudo で実行する必要あり
   - cleanup をつけないと前のデータベースが残ったまま起動して不整合が起きやすい
-- 停止(これも良く使う): scripts/stop.sh
+- 停止(これも良く使う): `scripts/stop.sh`
   - start.sh する前に停止しておいた方が良い
 
 - 起動後は以下にアクセスする(ポスグレサーバーとJupyter Notebookサーバーが同時に立ち上がるようになっている)
