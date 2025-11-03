@@ -8,6 +8,17 @@ if [ "$1" = "cleanup" ]; then
     echo "DBクリーンアップモードで起動します..."
 fi
 
+# sudo 実行時は SUDO_UID/SUDO_GID を優先し、ホストユーザーを特定
+HOST_UID="${SUDO_UID:-$(id -u)}"
+HOST_GID="${SUDO_GID:-$(id -g)}"
+POSTGRES_GID=999
+
+if [ "$HOST_UID" = "0" ]; then
+    echo "警告: ホストUIDが0です。rootで実行している可能性があります。所有権の設定に注意してください。" >&2
+fi
+
+echo "権限設定: ホストUID:GID=${HOST_UID}:${HOST_GID}, PostgreSQL GID=${POSTGRES_GID}"
+
 # DBクリーンアップの実行
 if [ "$CLEANUP_DB" = true ]; then
     echo "PostgreSQLデータボリュームをクリーンアップしています..."
@@ -26,19 +37,15 @@ if [ "$CLEANUP_DB" = true ]; then
     mkdir -p ./data/postgres
     
     # 現在のユーザーIDとグループIDを取得
-    CURRENT_UID=$(id -u)
-    CURRENT_GID=$(id -g)
-    
-    # ディレクトリの所有者を現在のユーザーに変更（Windowsエクスプローラーからアクセス可能にする）
-    # グループはPostgreSQL用の999に設定し、PostgreSQLコンテナもアクセス可能にする
-    sudo chown -R ${CURRENT_UID}:999 ./data/postgres
+    # ディレクトリの所有者をホストユーザーに変更し、PostgreSQLコンテナもアクセス可能にする
+    sudo chown -R ${HOST_UID}:${POSTGRES_GID} ./data/postgres
     # 777パーミッションで、所有者・グループ・その他すべてが読み書き可能にする
     chmod -R 777 ./data/postgres
 
     # init スクリプト・マイグレーション用ディレクトリは現在のユーザーのまま（読み取り専用で使用されるため）
     # 必要に応じて権限を調整
     if [ -d "./postgres" ]; then
-      sudo chown -R ${CURRENT_UID}:${CURRENT_GID} ./postgres
+      sudo chown -R ${HOST_UID}:${HOST_GID} ./postgres
       chmod -R 755 ./postgres
     fi
     
@@ -46,12 +53,10 @@ if [ "$CLEANUP_DB" = true ]; then
 else
     # cleanupモードでない場合も、既存のdata/postgresディレクトリの権限を確認・修正
     if [ -d "./data/postgres" ]; then
-        CURRENT_UID=$(id -u)
-        
         # 所有者が現在のユーザーでない場合、権限を修正
-        if [ "$(stat -c '%u' ./data/postgres 2>/dev/null)" != "$CURRENT_UID" ]; then
+        if [ "$(stat -c '%u' ./data/postgres 2>/dev/null)" != "$HOST_UID" ]; then
             echo "既存のdata/postgresディレクトリの権限を修正中（Windowsエクスプローラーからアクセス可能にします）..."
-            sudo chown -R ${CURRENT_UID}:999 ./data/postgres
+            sudo chown -R ${HOST_UID}:${POSTGRES_GID} ./data/postgres
             chmod -R 777 ./data/postgres
             echo "権限の修正が完了しました"
         fi

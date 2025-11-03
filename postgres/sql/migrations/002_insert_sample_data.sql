@@ -85,20 +85,20 @@ ON CONFLICT (workspace, doc_id) DO UPDATE
         created_at = EXCLUDED.created_at;
 
 -- 4. 複数テキストフィールドチャンクの挿入（テーブルが存在する場合のみ実行）
-DO $$
+DO $do$
 BEGIN
     IF to_regclass('public.lightrag_doc_chunks') IS NULL THEN
         RAISE NOTICE 'Skipping LIGHTRAG_DOC_CHUNKS sample insert (table not found).';
         RETURN;
     END IF;
 
-    EXECUTE $$
+    EXECUTE $delete$
         DELETE FROM LIGHTRAG_DOC_CHUNKS
         WHERE workspace = 'sample_workspace'
           AND full_doc_id IN ('order-2026-plan', 'order-2025-contract');
-    $$;
+    $delete$;
 
-    EXECUTE $$
+    EXECUTE $insert$
         INSERT INTO LIGHTRAG_DOC_CHUNKS (
             id, workspace, full_doc_id, chunk_order_index, tokens, content, content_vector, metadata
         ) VALUES
@@ -139,6 +139,6 @@ BEGIN
                 tokens = EXCLUDED.tokens,
                 content = EXCLUDED.content,
                 metadata = EXCLUDED.metadata;
-    $$;
+    $insert$;
 END;
-$$;
+$do$;
