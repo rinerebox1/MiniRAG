@@ -66,11 +66,11 @@ CREATE INDEX IF NOT EXISTS idx_customer_orders_workspace_created_at
 -- ------------------------------------------------------------
 -- LIGHTRAG_DOC_CHUNKS メタデータの text_field 補完とインデックス整備
 -- ------------------------------------------------------------
-DO $$
+DO $do$
 BEGIN
     IF to_regclass('public.lightrag_doc_chunks') IS NOT NULL THEN
         RAISE NOTICE 'Updating LIGHTRAG_DOC_CHUNKS.metadata -> text_field';
-        EXECUTE $$
+        EXECUTE $update$
             UPDATE LIGHTRAG_DOC_CHUNKS
             SET metadata = jsonb_set(
                 COALESCE(metadata, '{}'::jsonb),
@@ -79,7 +79,7 @@ BEGIN
             )
             WHERE metadata IS NULL
                OR NOT (metadata ? 'text_field');
-        $$;
+        $update$;
 
         IF NOT EXISTS (
             SELECT 1
@@ -89,13 +89,13 @@ BEGIN
               AND indexname = 'idx_chunks_text_field'
         ) THEN
             RAISE NOTICE 'Creating index idx_chunks_text_field on LIGHTRAG_DOC_CHUNKS';
-            EXECUTE $$
+            EXECUTE $create_index$
                 CREATE INDEX idx_chunks_text_field
                     ON LIGHTRAG_DOC_CHUNKS ((metadata->>'text_field'));
-            $$;
+            $create_index$;
         END IF;
     ELSE
         RAISE NOTICE 'Skipping LIGHTRAG_DOC_CHUNKS metadata update (table not found).';
     END IF;
 END;
-$$;
+$do$;
