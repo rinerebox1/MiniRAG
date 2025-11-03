@@ -55,7 +55,7 @@ from ..base import (
     DocProcessingStatus,
     BaseGraphStorage,
 )
-from datetime import datetime
+from datetime import datetime, timezone
 
 if sys.platform.startswith("win"):
     import asyncio.windows_events
@@ -587,31 +587,42 @@ class PGVectorStorage(BaseVectorStorage):
                         print(f"🔧 Flexible metadata filter: {key} = {str(value)} (handles both object and string types)")
         
         if start_time:
-            # 文字列なら datetime にパース
-            if isinstance(start_time, str):
-                try:
-                    start_time = datetime.fromisoformat(start_time)
-                except ValueError:
-                    # ISO形式以外も許容: 空白区切りなど
-                    try:
-                        start_time = datetime.strptime(start_time, "%Y-%m-%d %H:%M:%S")
-                    except ValueError:
-                        # パース失敗時はそのまま渡す (asyncpg が型変換を試みる)
-                        pass
-            where_clauses.append(f"updated_at >= ${param_idx}")
+            # datetimeオブジェクトまたは文字列を処理
+            if isinstance(start_time, datetime):
+                # タイムゾーン付きの場合はUTCに正規化
+                if start_time.tzinfo is not None:
+                    start_time = start_time.astimezone(timezone.utc)
+                # naiveなdatetimeとして扱う（PostgreSQLのTIMESTAMP WITHOUT TIME ZONEに対応）
+                # または、文字列に変換して安全に渡す
+                start_time = start_time.replace(tzinfo=None).isoformat()
+            elif isinstance(start_time, str):
+                # 既に文字列の場合はそのまま使用
+                pass
+            else:
+                # その他の型は文字列に変換
+                start_time = str(start_time)
+            
+            where_clauses.append(f"updated_at >= ${param_idx}::timestamp")
             params.append(start_time)
             param_idx += 1
 
         if end_time:
-            if isinstance(end_time, str):
-                try:
-                    end_time = datetime.fromisoformat(end_time)
-                except ValueError:
-                    try:
-                        end_time = datetime.strptime(end_time, "%Y-%m-%d %H:%M:%S")
-                    except ValueError:
-                        pass
-            where_clauses.append(f"updated_at <= ${param_idx}")
+            # datetimeオブジェクトまたは文字列を処理
+            if isinstance(end_time, datetime):
+                # タイムゾーン付きの場合はUTCに正規化
+                if end_time.tzinfo is not None:
+                    end_time = end_time.astimezone(timezone.utc)
+                # naiveなdatetimeとして扱う（PostgreSQLのTIMESTAMP WITHOUT TIME ZONEに対応）
+                # または、文字列に変換して安全に渡す
+                end_time = end_time.replace(tzinfo=None).isoformat()
+            elif isinstance(end_time, str):
+                # 既に文字列の場合はそのまま使用
+                pass
+            else:
+                # その他の型は文字列に変換
+                end_time = str(end_time)
+            
+            where_clauses.append(f"updated_at <= ${param_idx}::timestamp")
             params.append(end_time)
             param_idx += 1
 
