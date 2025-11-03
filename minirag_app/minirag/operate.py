@@ -691,6 +691,10 @@ async def _find_most_related_text_unit_from_entities(
             unit_time = unit.get("updated_at")
             if not unit_time:
                 continue
+            
+            # JSONB から読み戻された場合、datetime は文字列になっている可能性がある
+            if isinstance(unit_time, str):
+                unit_time = datetime.fromisoformat(unit_time.replace('Z', '+00:00'))
 
             if start_time_dt and unit_time < start_time_dt:
                 continue
@@ -1061,6 +1065,10 @@ async def _find_related_text_unit_from_relationships(
             unit_time = unit.get("updated_at")
             if not unit_time:
                 continue
+            
+            # JSONB から読み戻された場合、datetime は文字列になっている可能性がある
+            if isinstance(unit_time, str):
+                unit_time = datetime.fromisoformat(unit_time.replace('Z', '+00:00'))
             
             if start_time_dt and unit_time < start_time_dt:
                 continue

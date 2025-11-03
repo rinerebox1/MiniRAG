@@ -16,12 +16,19 @@ def _jsonb(obj: Any):
     * If *obj* is ``None`` → return '{}' (empty JSON object string)
     * If it is already a ``str`` →そのまま返す（既に JSON シリアライズ済みとみなす）
     * それ以外は ``json.dumps`` で 1 回だけ文字列化する
+    * ``datetime`` オブジェクトは ISO 8601 文字列に変換する
     """
     if obj is None:
         return "{}"
     if isinstance(obj, str):
         return obj
-    return json.dumps(obj)
+    
+    def _default_serializer(value):
+        if isinstance(value, datetime):
+            return value.isoformat()
+        raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
+    
+    return json.dumps(obj, default=_default_serializer)
 
 
 import pipmaster as pm
