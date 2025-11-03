@@ -24,15 +24,38 @@ if [ "$CLEANUP_DB" = true ]; then
     
     echo "data/postgres ディレクトリをフル権限で作成中..."
     mkdir -p ./data/postgres
-    sudo chown -R 999:999 ./data/postgres
-    chmod 777 ./data/postgres
+    
+    # 現在のユーザーIDとグループIDを取得
+    CURRENT_UID=$(id -u)
+    CURRENT_GID=$(id -g)
+    
+    # ディレクトリの所有者を現在のユーザーに変更（Windowsエクスプローラーからアクセス可能にする）
+    # グループはPostgreSQL用の999に設定し、PostgreSQLコンテナもアクセス可能にする
+    sudo chown -R ${CURRENT_UID}:999 ./data/postgres
+    # 777パーミッションで、所有者・グループ・その他すべてが読み書き可能にする
+    chmod -R 777 ./data/postgres
 
-    # init スクリプト・マイグレーション用ディレクトリもUID 999に変更
+    # init スクリプト・マイグレーション用ディレクトリは現在のユーザーのまま（読み取り専用で使用されるため）
+    # 必要に応じて権限を調整
     if [ -d "./postgres" ]; then
-      sudo chown -R 999:999 ./postgres
+      sudo chown -R ${CURRENT_UID}:${CURRENT_GID} ./postgres
+      chmod -R 755 ./postgres
     fi
     
     echo "data/postgres のクリーンアップが完了しました"
+else
+    # cleanupモードでない場合も、既存のdata/postgresディレクトリの権限を確認・修正
+    if [ -d "./data/postgres" ]; then
+        CURRENT_UID=$(id -u)
+        
+        # 所有者が現在のユーザーでない場合、権限を修正
+        if [ "$(stat -c '%u' ./data/postgres 2>/dev/null)" != "$CURRENT_UID" ]; then
+            echo "既存のdata/postgresディレクトリの権限を修正中（Windowsエクスプローラーからアクセス可能にします）..."
+            sudo chown -R ${CURRENT_UID}:999 ./data/postgres
+            chmod -R 777 ./data/postgres
+            echo "権限の修正が完了しました"
+        fi
+    fi
 fi
 
 echo "PostgreSQL + AGE + pgvector コンテナと MiniRAG コンテナを起動します..."

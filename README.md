@@ -66,7 +66,15 @@ chmod +x scripts/stop.sh
   - minirag_app/docs/MiniRAG_on_postgres.ipynb を使う
 
 
-- 作成したデータベースは「MiniRAG/data/postgres」に保存されるがホスト側からはアクセスできない。
+- 作成したデータベースは「MiniRAG/data/postgres」保存されるのですが、Windowsエクスプローラーからはアクセスできない問題があったので以下の変更をした
+  - 原因は、start.shでsudo chown -R 999:999 ./data/postgresにより所有者がPostgreSQLユーザー（UID 999）になっていることです。これによりWindowsエクスプローラーからのアクセスが難しくなります。
+  - 対応: ディレクトリの所有者を現在のユーザーにし、PostgreSQLコンテナが書き込めるようグループとパーミッションを調整します。start.shを修正した。
+  - それでもアクセスできない場合は以下を手動実行すれば良い
+  ```
+  CURRENT_UID=$(id -u)
+  sudo chown -R ${CURRENT_UID}:999 ./data/postgres
+  chmod -R 777 ./data/postgres
+  ```
 
 - [done]PostgreSQL + pgvector + Apache AGE の Docker はできたので、次は MiniRAG を Docker で構築してみる。
 - [done]PostgreSQL16_pgvector(HNSW)_ApacheAGE_Docker に作っちゃったけど、最後には1つの Docker にまとめたい。
