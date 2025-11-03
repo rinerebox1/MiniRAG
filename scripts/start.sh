@@ -74,7 +74,31 @@ else
     docker compose up -d
 fi
 
+# PostgreSQLコンテナのhealthcheckが成功するまで待機（最大60秒）
+echo "PostgreSQLコンテナの起動を待機中..."
+MAX_WAIT=60
+WAIT_COUNT=0
+while [ $WAIT_COUNT -lt $MAX_WAIT ]; do
+    if docker compose ps postgres | grep -q "healthy"; then
+        echo "PostgreSQLコンテナが正常起動しました"
+        break
+    fi
+    sleep 2
+    WAIT_COUNT=$((WAIT_COUNT + 2))
+    echo -n "."
+done
+echo ""
+
+# PostgreSQLコンテナが起動した後、data/postgres の所有権を再設定
+# （コンテナ内で作成されたファイルの所有権が postgres ユーザー (UID 999) になっているため）
+if [ -d "./data/postgres" ]; then
+    echo "data/postgres ディレクトリの所有権をホストユーザーに修正中（Windowsエクスプローラーからアクセス可能にします）..."
+    sudo chown -R ${HOST_UID}:${POSTGRES_GID} ./data/postgres
+    chmod -R 777 ./data/postgres
+    echo "所有権の修正が完了しました"
+fi
+
 # 起動したコンテナのログを少し表示して、正常起動を確認
 echo "コンテナの起動ログ:"
-docker compose logs -f --tail=30 postgres
-docker compose logs -f --tail=30 minirag_on_postgre
+docker compose logs --tail=30 postgres
+docker compose logs --tail=30 minirag_on_postgre
