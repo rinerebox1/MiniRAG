@@ -33,6 +33,8 @@ COPY setup.py .
 
 # ソースコードをコピー（最後にコピーしてキャッシュ効率を最大化）
 COPY minirag ./minirag
+# docsフォルダをコピー（Jupyter Notebookで使用するため）
+COPY docs ./docs
 
 ##### SEDによる修正 #####
 # ここでソースコードのバグを修正します
@@ -52,6 +54,7 @@ COPY --from=builder /root/.local /root/.local
 # アプリケーションコードをコピー
 COPY --from=builder /app/minirag ./minirag
 COPY --from=builder /app/setup.py .
+COPY --from=builder /app/docs ./docs
 
 ENV PATH="/root/.local/bin:${PATH}"
 
