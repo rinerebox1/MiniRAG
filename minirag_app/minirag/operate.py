@@ -34,6 +34,41 @@ from .base import (
 from .prompt import GRAPH_FIELD_SEP, PROMPTS
 
 
+def _parse_metadata_dict(raw_metadata):
+    if isinstance(raw_metadata, dict):
+        return raw_metadata
+    if isinstance(raw_metadata, str):
+        try:
+            parsed = json.loads(raw_metadata)
+            if isinstance(parsed, dict):
+                return parsed
+        except json.JSONDecodeError:
+            pass
+    return {}
+
+
+def _extract_category_from_metadata(raw_metadata):
+    meta = _parse_metadata_dict(raw_metadata)
+    return meta.get("category")
+
+
+def _debug_log_filter_samples(context_label: str, phase_label: str, units: list, metadata_filter: dict):
+    try:
+        max_samples = 5
+        samples = []
+        for u in (units or [])[:max_samples]:
+            cid = u.get("id", "")
+            cat = _extract_category_from_metadata(u.get("metadata"))
+            dist = u.get("_distance", "N/A")
+            samples.append(f"- id={str(cid)[:16]}..., category={cat}, distance={dist}")
+        print(f"[{context_label}] Metadata filter: {metadata_filter}")
+        print(f"[{context_label}] {phase_label}: {len(units or [])} candidates")
+        if samples:
+            print(f"[{context_label}] {phase_label} samples:\n  " + "\n  ".join(samples))
+    except Exception as e:
+        print(f"[{context_label}] Debug logging failed: {e}")
+
+
 def chunking_by_token_size(
     content: str, overlap_token_size=128, max_token_size=1024, tiktoken_model="gpt-4o"
 ):
@@ -511,6 +546,7 @@ async def _build_local_query_context(
     if query_param.metadata_filter:
         # フィルタ適用前の件数を記録
         _before_cnt = len(use_text_units)
+        _debug_log_filter_samples("Local", "before", use_text_units, query_param.metadata_filter)
         filtered_text_units = []
         for unit in use_text_units:
             chunk_metadata_raw = unit.get("metadata")
@@ -534,6 +570,8 @@ async def _build_local_query_context(
             if is_match:
                 filtered_text_units.append(unit)
         use_text_units = filtered_text_units
+        print(f"[Local] filter reduced candidates: before={_before_cnt} -> after={len(use_text_units)}")
+        _debug_log_filter_samples("Local", "after", use_text_units, query_param.metadata_filter)
 
     # フィルタリング後のチャンクに基づいてエンティティの情報を再構築する
     filtered_chunk_content_map = {unit["id"]: unit["content"] for unit in use_text_units}
@@ -885,6 +923,7 @@ async def _build_global_query_context(
     # 取得したチャンクに対してメタデータフィルタを適用
     if query_param.metadata_filter:
         _before_cnt = len(use_text_units)
+        _debug_log_filter_samples("Global", "before", use_text_units, query_param.metadata_filter)
         filtered_text_units = []
         for unit in use_text_units:
             chunk_metadata_raw = unit.get("metadata")
@@ -908,6 +947,8 @@ async def _build_global_query_context(
             if is_match:
                 filtered_text_units.append(unit)
         use_text_units = filtered_text_units
+        print(f"[Global] filter reduced candidates: before={_before_cnt} -> after={len(use_text_units)}")
+        _debug_log_filter_samples("Global", "after", use_text_units, query_param.metadata_filter)
 
     # フィルタリングされたチャンクに基づいて、エンティティとリレーションシップの情報を再構築する
     filtered_chunk_content_map = {unit["id"]: unit["content"] for unit in use_text_units}
