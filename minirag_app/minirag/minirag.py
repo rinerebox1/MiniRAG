@@ -334,6 +334,7 @@ class MiniRAG:
 
     def set_storage_client(self, db_client):
         # Now only tested on Oracle Database
+        self.storage_client = db_client
         for storage in [
             self.vector_db_storage_cls,
             self.graph_storage_cls,
