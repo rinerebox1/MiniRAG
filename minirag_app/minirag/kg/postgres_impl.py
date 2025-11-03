@@ -593,14 +593,22 @@ class PGVectorStorage(BaseVectorStorage):
                 if start_time.tzinfo is not None:
                     start_time = start_time.astimezone(timezone.utc)
                 # naiveなdatetimeとして扱う（PostgreSQLのTIMESTAMP WITHOUT TIME ZONEに対応）
-                # または、文字列に変換して安全に渡す
-                start_time = start_time.replace(tzinfo=None).isoformat()
+                start_time = start_time.replace(tzinfo=None)
             elif isinstance(start_time, str):
-                # 既に文字列の場合はそのまま使用
-                pass
+                # ISO形式の文字列をdatetimeオブジェクトにパース
+                try:
+                    start_time = datetime.fromisoformat(start_time.replace('Z', '+00:00'))
+                    # タイムゾーン付きの場合はUTCに正規化
+                    if start_time.tzinfo is not None:
+                        start_time = start_time.astimezone(timezone.utc)
+                    # naiveなdatetimeに変換
+                    start_time = start_time.replace(tzinfo=None)
+                except (ValueError, AttributeError):
+                    # パースできない場合はエラーを発生させる
+                    raise ValueError(f"Invalid datetime string format: {start_time}")
             else:
-                # その他の型は文字列に変換
-                start_time = str(start_time)
+                # その他の型はエラー
+                raise TypeError(f"start_time must be datetime or ISO format string, got {type(start_time)}")
             
             where_clauses.append(f"updated_at >= ${param_idx}::timestamp")
             params.append(start_time)
@@ -613,14 +621,22 @@ class PGVectorStorage(BaseVectorStorage):
                 if end_time.tzinfo is not None:
                     end_time = end_time.astimezone(timezone.utc)
                 # naiveなdatetimeとして扱う（PostgreSQLのTIMESTAMP WITHOUT TIME ZONEに対応）
-                # または、文字列に変換して安全に渡す
-                end_time = end_time.replace(tzinfo=None).isoformat()
+                end_time = end_time.replace(tzinfo=None)
             elif isinstance(end_time, str):
-                # 既に文字列の場合はそのまま使用
-                pass
+                # ISO形式の文字列をdatetimeオブジェクトにパース
+                try:
+                    end_time = datetime.fromisoformat(end_time.replace('Z', '+00:00'))
+                    # タイムゾーン付きの場合はUTCに正規化
+                    if end_time.tzinfo is not None:
+                        end_time = end_time.astimezone(timezone.utc)
+                    # naiveなdatetimeに変換
+                    end_time = end_time.replace(tzinfo=None)
+                except (ValueError, AttributeError):
+                    # パースできない場合はエラーを発生させる
+                    raise ValueError(f"Invalid datetime string format: {end_time}")
             else:
-                # その他の型は文字列に変換
-                end_time = str(end_time)
+                # その他の型はエラー
+                raise TypeError(f"end_time must be datetime or ISO format string, got {type(end_time)}")
             
             where_clauses.append(f"updated_at <= ${param_idx}::timestamp")
             params.append(end_time)
