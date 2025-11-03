@@ -100,5 +100,5 @@ fi
 
 # 起動したコンテナのログを少し表示して、正常起動を確認
 echo "コンテナの起動ログ:"
-docker compose logs --tail=30 postgres
-docker compose logs --tail=30 minirag_on_postgre
+docker compose logs -f --tail=30 postgres
+docker compose logs -f --tail=30 minirag_on_postgre
