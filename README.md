@@ -68,7 +68,7 @@ chmod +x scripts/stop.sh
 
 - 作成したデータベースは「MiniRAG/data/postgres」保存されるのですが、Windowsエクスプローラーからはアクセスできない問題があったので以下の変更をした
   - 原因は、start.shでsudo chown -R 999:999 ./data/postgresにより所有者がPostgreSQLユーザー（UID 999）になっていることです。これによりWindowsエクスプローラーからのアクセスが難しくなります。
-  - 対応: ディレクトリの所有者を現在のユーザーにし、PostgreSQLコンテナが書き込めるようグループとパーミッションを調整します。start.shを修正した。
+  - 対応: ディレクトリの所有者を現在のユーザーにし、PostgreSQLコンテナが書き込めるようグループとパーミッションを調整します。start.shを修正した。さらに、PostgreSQLコンテナ起動後にコンテナ内のpostgresユーザー（UID 999）でdata/postgres配下にファイルが作成され、所有権が999に変わっていた。start.shではdocker compose up -d前にchownしているため、起動後に作成されたファイルの所有権が戻っていた。対応として、コンテナ起動後に再度chownを実行するように修正した。
   - それでもアクセスできない場合は以下を手動実行すれば良い
   ```
   CURRENT_UID=$(id -u)
