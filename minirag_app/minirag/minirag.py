@@ -1,4 +1,5 @@
 import asyncio
+import json
 import os
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
@@ -810,6 +811,27 @@ class MiniRAG:
             # For now, we log the error and proceed, which was the previous behavior.
             logger.warning("Proceeding with upsert despite cascade delete failure.")
 
+    def _normalize_metadata(self, metadata: Any) -> dict:
+        """
+        メタデータを辞書に正規化する
+        
+        Args:
+            metadata: メタデータ（辞書、JSON文字列、Noneのいずれか）
+        
+        Returns:
+            dict: 正規化されたメタデータ（常に辞書）
+        """
+        if isinstance(metadata, dict):
+            return metadata
+        elif isinstance(metadata, str):
+            try:
+                return json.loads(metadata)
+            except (json.JSONDecodeError, TypeError) as e:
+                logger.warning(f"Failed to parse metadata as JSON: {e}. Using empty dict.")
+                return {}
+        else:
+            return {}
+    
     def _extract_text_fields(self, data: dict) -> tuple[dict[str, str], dict]:
         """
         dictからテキストフィールドとメタデータを分離
@@ -948,11 +970,16 @@ class MiniRAG:
             for doc_id, status_doc in docs_batch:
                 print(f"⚙️  Processing doc '{doc_id}', status_doc.metadata = {status_doc.metadata}")
                 
+                # メタデータを辞書に正規化（文字列の場合はJSONパース、Noneの場合は空辞書）
+                metadata = self._normalize_metadata(status_doc.metadata)
+                # status_doc.metadata を更新（後続処理で使用されるため）
+                status_doc.metadata = metadata
+                
                 # 🆕 フィールド分割が有効な場合はフィールドごとにチャンクを生成
-                if self.enable_field_splitting and hasattr(status_doc, 'metadata') and status_doc.metadata:
+                if self.enable_field_splitting and metadata:
                     # status_doc.content を解析してフィールド分割できるか試みる
                     # メタデータに元の構造化データがある場合を想定
-                    original_data = status_doc.metadata.get("_original_data")
+                    original_data = metadata.get("_original_data")
                     
                     if original_data and isinstance(original_data, dict):
                         # 構造化データからフィールド分割
@@ -965,7 +992,7 @@ class MiniRAG:
                             compute_mdhash_id(dp["content"], prefix="chunk-"): {
                                 **dp,
                                 "full_doc_id": doc_id,
-                                "metadata": {**(status_doc.metadata or {}), "text_field": "_all"},  # 🆕 _all マーカー
+                                "metadata": {**metadata, "text_field": "_all"},  # 🆕 _all マーカー
                             }
                             for dp in self.chunking_func(
                                 status_doc.content,
@@ -981,7 +1008,7 @@ class MiniRAG:
                         compute_mdhash_id(dp["content"], prefix="chunk-"): {
                             **dp,
                             "full_doc_id": doc_id,
-                            "metadata": {**(status_doc.metadata or {}), "text_field": "_all"},  # 🆕 _all マーカー
+                            "metadata": {**metadata, "text_field": "_all"},  # 🆕 _all マーカー
                         }
                         for dp in self.chunking_func(
                             status_doc.content,
@@ -999,7 +1026,7 @@ class MiniRAG:
                 await asyncio.gather(
                     self.chunks_vdb.upsert(chunks),
                     self.full_docs.upsert(
-                        {doc_id: {"content": status_doc.content, "metadata": status_doc.metadata or {}}}
+                        {doc_id: {"content": status_doc.content, "metadata": metadata}}
                     ),
                     self.text_chunks.upsert(chunks),
                 )

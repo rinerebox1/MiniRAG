@@ -348,3 +348,86 @@ async def test_field_specific_query_with_metadata_filter(mini_rag, pg_conn):
 
     assert no_match_sources == []
     assert "Sorry" in no_match_context
+
+
+@pytest.mark.asyncio
+async def test_metadata_string_handling_with_field_splitting(mini_rag, pg_conn, monkeypatch):
+    """メタデータがJSON文字列の場合でもフィールド分割が正常に動作することを確認"""
+    rag, pg_db, workspace = mini_rag
+    
+    # ensure_metadata_dict フィクスチャを一時的に無効化して、実際の文字列ケースをテスト
+    original_get = PGDocStatusStorage.get_docs_by_status
+    
+    async def _get_with_string_metadata(self, status):
+        """メタデータを文字列のまま返すバージョン（実際のPostgreSQL動作を再現）"""
+        result = await original_get(self, status)
+        for doc in result.values():
+            # メタデータが辞書の場合はJSON文字列に変換
+            if hasattr(doc, "metadata") and isinstance(doc.metadata, dict):
+                doc.metadata = json.dumps(doc.metadata)
+        return result
+    
+    monkeypatch.setattr(PGDocStatusStorage, "get_docs_by_status", _get_with_string_metadata)
+    
+    # フィールド分割を有効化
+    rag.enable_field_splitting = True
+    
+    doc_id = "order-2025-003"
+    created_at = datetime(2025, 10, 3, 10, 0, tzinfo=timezone.utc)
+    record = {
+        "workspace": workspace,
+        "doc_id": doc_id,
+        "title": "テスト用ドキュメント",
+        "summary": "サマリー部分のテキスト",
+        "body": ["本文1", "本文2"],
+        "status": "active",
+        "region": "JP",
+        "priority": 1,
+        "created_at": created_at,
+        "metadata": {
+            "category": "test",
+            "region": "JP",
+        },
+    }
+    schema = {
+        "table": "public.customer_orders",
+        "id_column": "doc_id",
+        "fields": {
+            "workspace": {"type": "text", "nullable": False},
+            "doc_id": {"type": "text", "nullable": False},
+            "title": {"type": "text"},
+            "summary": {"type": "text"},
+            "body": {"type": "text"},
+            "status": {"type": "text"},
+            "region": {"type": "text"},
+            "priority": {"type": "integer"},
+            "created_at": {"type": "timestamp"},
+        },
+        "conflict_columns": ["workspace", "doc_id"],
+    }
+    
+    # ドキュメントを挿入（この時点ではメタデータは辞書）
+    await rag.ainsert([record], schema=schema, text_fields=["title", "summary", "body"])
+    
+    # 処理を実行（メタデータが文字列として返される状態で）
+    # apipeline_process_enqueue_documents が呼ばれる
+    await rag.apipeline_process_enqueue_documents()
+    
+    # チャンクが正常に生成されていることを確認（エラーが発生しない）
+    chunks = await pg_conn.fetch(
+        """
+        SELECT id, metadata
+        FROM LIGHTRAG_DOC_CHUNKS
+        WHERE workspace=$1 AND full_doc_id=$2
+        """,
+        workspace,
+        doc_id,
+    )
+    
+    assert len(chunks) > 0, "チャンクが生成されていません"
+    
+    # メタデータが正しく辞書として処理されていることを確認
+    for chunk in chunks:
+        metadata = chunk["metadata"]
+        # メタデータはJSONBなので辞書として取得されるはず
+        assert isinstance(metadata, dict), f"メタデータが辞書ではありません: {type(metadata)}"
