@@ -62,3 +62,40 @@ CREATE TABLE IF NOT EXISTS public.customer_orders (
 
 CREATE INDEX IF NOT EXISTS idx_customer_orders_workspace_created_at
     ON public.customer_orders (workspace, created_at DESC);
+
+-- ------------------------------------------------------------
+-- LIGHTRAG_DOC_CHUNKS メタデータの text_field 補完とインデックス整備
+-- ------------------------------------------------------------
+DO $$
+BEGIN
+    IF to_regclass('public.lightrag_doc_chunks') IS NOT NULL THEN
+        RAISE NOTICE 'Updating LIGHTRAG_DOC_CHUNKS.metadata -> text_field';
+        EXECUTE $$
+            UPDATE LIGHTRAG_DOC_CHUNKS
+            SET metadata = jsonb_set(
+                COALESCE(metadata, '{}'::jsonb),
+                '{text_field}',
+                '"_all"'::jsonb
+            )
+            WHERE metadata IS NULL
+               OR NOT (metadata ? 'text_field');
+        $$;
+
+        IF NOT EXISTS (
+            SELECT 1
+            FROM pg_indexes
+            WHERE schemaname = 'public'
+              AND tablename = 'lightrag_doc_chunks'
+              AND indexname = 'idx_chunks_text_field'
+        ) THEN
+            RAISE NOTICE 'Creating index idx_chunks_text_field on LIGHTRAG_DOC_CHUNKS';
+            EXECUTE $$
+                CREATE INDEX idx_chunks_text_field
+                    ON LIGHTRAG_DOC_CHUNKS ((metadata->>'text_field'));
+            $$;
+        END IF;
+    ELSE
+        RAISE NOTICE 'Skipping LIGHTRAG_DOC_CHUNKS metadata update (table not found).';
+    END IF;
+END;
+$$;
