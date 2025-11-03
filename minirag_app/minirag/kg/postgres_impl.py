@@ -694,11 +694,42 @@ class PGVectorStorage(BaseVectorStorage):
                     if debug:
                         print("🔎 Raw metadata and distance values:")
                         for dr in distance_results:
-                            print(f"   - ID: {dr.get('id', '')[:16]}...")
-                            print(f"     Raw metadata: {dr.get('metadata')}")
-                            print(f"     Extracted category: {dr.get('category')}")
-                            print(f"     Distance: {dr.get('distance')}")
-                            print(f"     Metadata type: {type(dr.get('metadata'))}")
+                            metadata_raw = dr.get('metadata')
+                            # メタデータが文字列の場合はJSONとしてパースして表示
+                            # これにより、実際にメタデータが登録されている場合は正しく表示される
+                            if isinstance(metadata_raw, str):
+                                try:
+                                    metadata_parsed = json.loads(metadata_raw)
+                                    if isinstance(metadata_parsed, dict) and metadata_parsed:
+                                        print(f"   - ID: {dr.get('id', '')[:16]}...")
+                                        print(f"     Raw metadata: {metadata_parsed}")
+                                        print(f"     Extracted category: {dr.get('category')}")
+                                        print(f"     Distance: {dr.get('distance')}")
+                                    else:
+                                        # 空の辞書の場合は表示をスキップ（元々メタデータが登録されていない場合）
+                                        print(f"   - ID: {dr.get('id', '')[:16]}...")
+                                        print(f"     Raw metadata: {{}} (no metadata registered)")
+                                        print(f"     Distance: {dr.get('distance')}")
+                                except json.JSONDecodeError:
+                                    print(f"   - ID: {dr.get('id', '')[:16]}...")
+                                    print(f"     Raw metadata: {metadata_raw} (parse error)")
+                                    print(f"     Distance: {dr.get('distance')}")
+                            elif isinstance(metadata_raw, dict):
+                                if metadata_raw:
+                                    print(f"   - ID: {dr.get('id', '')[:16]}...")
+                                    print(f"     Raw metadata: {metadata_raw}")
+                                    print(f"     Extracted category: {dr.get('category')}")
+                                    print(f"     Distance: {dr.get('distance')}")
+                                else:
+                                    # 空の辞書の場合は表示をスキップ（元々メタデータが登録されていない場合）
+                                    print(f"   - ID: {dr.get('id', '')[:16]}...")
+                                    print(f"     Raw metadata: {{}} (no metadata registered)")
+                                    print(f"     Distance: {dr.get('distance')}")
+                            else:
+                                print(f"   - ID: {dr.get('id', '')[:16]}...")
+                                print(f"     Raw metadata: {metadata_raw}")
+                                print(f"     Metadata type: {type(metadata_raw)}")
+                                print(f"     Distance: {dr.get('distance')}")
             
             return results
         except Exception as e:

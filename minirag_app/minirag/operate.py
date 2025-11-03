@@ -356,10 +356,13 @@ async def extract_entities(
         await entity_vdb.upsert(data_for_vdb)
 
     if entity_name_vdb is not None:
+        # 🆕 メタデータを付与: source_id の最初のチャンクから取得
+        # これにより、minirag_query での metadata_filter が機能し、検索性能にも影響する
         data_for_vdb = {
             compute_mdhash_id(dp["entity_name"], prefix="Ename-"): {
                 "content": dp["entity_name"],
                 "entity_name": dp["entity_name"],
+                "metadata": chunks.get(dp["source_id"].split(GRAPH_FIELD_SEP)[0], {}).get("metadata", {}),
             }
             for dp in all_entities_data
         }
@@ -1156,6 +1159,9 @@ async def hybrid_query(
 
     context, _ = combine_contexts(high_level_context, low_level_context)
     # 重複を防ぐため、setを使用してユニークな要素のみを結合
+    # 注意: これは文字列ベースの重複排除のため、完全に同じコンテンツのソースは1つにまとめられる
+    # フィールド別チャンクと統合チャンクは異なるIDで保存されるが、同じコンテンツの場合、
+    # 検索結果では文字列が同じため、この重複排除により1つにまとめられる
     source = list(set(ll_source + hl_source))
 
     if query_param.only_need_context:

@@ -896,6 +896,9 @@ class MiniRAG:
             )
             
             for chunk in field_chunks:
+                # チャンクIDは content + field_name + doc_id から生成されるため、
+                # 同じコンテンツでも異なるフィールドなら異なるIDになる
+                # all_chunks は辞書なので、完全に同じIDのチャンクは自動的に上書きされる（重複排除）
                 chunk_id = compute_mdhash_id(
                     chunk["content"] + field_name + doc_id,
                     prefix=f"chunk-{field_name}-"
@@ -920,6 +923,9 @@ class MiniRAG:
             )
             
             for chunk in combined_chunks:
+                # 統合版チャンクは "_all" + doc_id でIDが生成されるため、
+                # フィールド別チャンクとは異なるIDになる
+                # ただし、検索結果での重複排除は hybrid_query の source = list(set(...)) で行われる
                 chunk_id = compute_mdhash_id(
                     chunk["content"] + "_all" + doc_id,
                     prefix="chunk-all-"
