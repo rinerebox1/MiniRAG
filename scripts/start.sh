@@ -23,7 +23,9 @@ echo "権限設定: ホストUID:GID=${HOST_UID}:${HOST_GID}, PostgreSQL GID=${P
 if [ "$CLEANUP_DB" = true ]; then
     echo "PostgreSQLデータボリュームをクリーンアップしています..."
     
-    # 既存のコンテナを停止・削除
+    # 既存のコンテナを停止・削除（compose 管理外の同名コンテナも明示的に削除）
+    docker rm -f postgres16_age_pgvector_container 2>/dev/null || true
+    docker rm -f minirag_on_postgre_container 2>/dev/null || true
     docker compose down --volumes --rmi all
     
     # data/postgres ディレクトリを削除して再作成
